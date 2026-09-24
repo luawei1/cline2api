@@ -187,8 +187,8 @@ func TestCallClineAPIFreeRetriesNextGLMAccountAfterTokenRefreshFailure(t *testin
 	if got, want := strings.Join(models, ","), freeModelPrimary; got != want {
 		t.Fatalf("models = %q, want %q", got, want)
 	}
-	if first.Status != "expired" {
-		t.Fatalf("first account status = %q, want expired", first.Status)
+	if first.Status != "cooldown" {
+		t.Fatalf("first account status = %q, want cooldown (a 500 from /auth/refresh is transient)", first.Status)
 	}
 }
 

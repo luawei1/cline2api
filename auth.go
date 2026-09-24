@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -209,6 +211,25 @@ func registerWithCline(workosAccess, workosRefresh string) (*clineAuthResp, erro
 	return &c, nil
 }
 
+// refreshRejectedError 表示 Cline 明確拒絕了這把 refresh token；只有這種失敗才代表帳號真的失效。
+// 網路中斷、DNS 失敗、5xx 都是暫時性的，若也當成失效，一次斷網就會把整個帳號池永久標成 expired。
+type refreshRejectedError struct {
+	statusCode int
+}
+
+func (e *refreshRejectedError) Error() string {
+	return fmt.Sprintf("cline refresh rejected: %d", e.statusCode)
+}
+
+func isRefreshRejectionStatus(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden
+}
+
+func isRefreshRejected(err error) bool {
+	var rejected *refreshRejectedError
+	return errors.As(err, &rejected)
+}
+
 func refreshClineToken(refreshToken string) (*clineRefreshResp, error) {
 	body := map[string]string{
 		"refreshToken": refreshToken,
@@ -221,6 +242,9 @@ func refreshClineToken(refreshToken string) (*clineRefreshResp, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		if isRefreshRejectionStatus(resp.StatusCode) {
+			return nil, &refreshRejectedError{statusCode: resp.StatusCode}
+		}
 		return nil, fmt.Errorf("cline refresh failed: %d", resp.StatusCode)
 	}
 

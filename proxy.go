@@ -1116,8 +1116,6 @@ func callClineAPIWithAccount(acc *Account, params map[string]any, stream bool) (
 				return nil, acc, &clineAccountUnavailableError{err: fmt.Errorf("account %s token expired permanently", acc.Email)}
 			}
 		} else {
-			acc.Status = "expired"
-			savePool()
 			return nil, acc, &clineAccountUnavailableError{err: fmt.Errorf("account %s refresh failed: %w", acc.Email, err)}
 		}
 	}

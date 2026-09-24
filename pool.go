@@ -169,7 +169,12 @@ func getAccountByID(accountID string) *Account {
 func refreshAccountToken(acc *Account) error {
 	resp, err := refreshClineToken(acc.RefreshToken)
 	if err != nil {
-		acc.Status = "expired"
+		if isRefreshRejected(err) {
+			acc.Status = "expired"
+		} else {
+			acc.Status = "cooldown"
+			acc.CooldownUntil = time.Now().Add(5 * time.Minute)
+		}
 		savePool()
 		return fmt.Errorf("token refresh failed: %w", err)
 	}
