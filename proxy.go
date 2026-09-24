@@ -692,6 +692,28 @@ func hasToolUseBlocks(content any) bool {
 	return false
 }
 
+// modelMaxOutputLimit 返回模型已知的最大输出 token 硬上限（0=未知，不封顶）。
+// 已知硬限制表优先（gemini-3.8-flash 等）；其次取池中该模型的 Output 元数据
+// （remote 同步 / 管理页设置 / 用户自定义模型）。zen 模型的 Output 是压缩预算
+// 用的估值（未知模型默认 32768），作为硬上限会误伤长输出，跳过。
+func modelMaxOutputLimit(model string) int {
+	if meta, ok := lookupClineModelMeta(model); ok && meta.Output > 0 {
+		return meta.Output
+	}
+	if strings.TrimSpace(model) == "" {
+		return 0
+	}
+	p := loadPool()
+	poolMu.Lock()
+	defer poolMu.Unlock()
+	for _, m := range p.Models {
+		if m.ID == model && !isZenSource(m) && m.Output > 0 {
+			return m.Output
+		}
+	}
+	return 0
+}
+
 func buildUpstreamBody(params map[string]any, stream bool) map[string]any {
 	sessionID := fmt.Sprintf("sess_%d", time.Now().UnixMilli())
 
@@ -714,6 +736,14 @@ func buildUpstreamBody(params map[string]any, stream bool) map[string]any {
 	model := getDefaultModel()
 	if m, ok := params["model"].(string); ok && m != "" {
 		model = m
+	}
+
+	// 模型已知硬上限封顶：gemini-3.8-flash 最大输出 65536，默认预算 128000 会被
+	// 上游网关 400（maxOutputTokens out of range / Request contains an invalid argument），
+	// 且 429 配额限流回退到 vertex/google 路由时必现。
+	if limit := modelMaxOutputLimit(model); limit > 0 && maxTokens > limit {
+		log.Printf("  clamp max_tokens=%d -> %d (model %q output limit)", maxTokens, limit, model)
+		maxTokens = limit
 	}
 
 	body := map[string]any{

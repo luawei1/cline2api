@@ -224,6 +224,19 @@ func callProvider(p *CustomProvider, params map[string]any, stream bool) (*http.
 		log.Printf("  provider clamp max_completion_tokens=%d -> %d (upstream requires >= %d)", int(mt), defaultMaxTokens, minUpstreamMaxTokens)
 		body["max_completion_tokens"] = defaultMaxTokens
 	}
+	// 与 buildUpstreamBody 对称：按模型已知硬上限封顶（gemini-3.8-flash 等）
+	if modelID, _ := body["model"].(string); modelID != "" {
+		if limit := modelMaxOutputLimit(modelID); limit > 0 {
+			if mt, ok := body["max_tokens"].(float64); ok && mt > float64(limit) {
+				log.Printf("  provider clamp max_tokens=%d -> %d (model %q output limit)", int(mt), limit, modelID)
+				body["max_tokens"] = float64(limit)
+			}
+			if mt, ok := body["max_completion_tokens"].(float64); ok && mt > float64(limit) {
+				log.Printf("  provider clamp max_completion_tokens=%d -> %d (model %q output limit)", int(mt), limit, modelID)
+				body["max_completion_tokens"] = float64(limit)
+			}
+		}
+	}
 
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
