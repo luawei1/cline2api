@@ -36,6 +36,7 @@ const zenAPIBase = "https://opencode.ai/zen/v1"
 const (
 	upstreamCline    = "cline"
 	upstreamOpenCode = "opencode"
+	upstreamProvider = "provider"
 )
 
 const zenModelSyncInterval = 10 * time.Minute

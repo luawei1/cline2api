@@ -1,5 +1,6 @@
 .cline-accounts.json
 .cline-credentials.json
+.cline-providers.json
 .cline-request-logs.json
 .cline-zen.json
 .cline-config.json
@@ -38,3 +39,7 @@ frontend/wailsjs/
 
 # 本地参考缓存（opencode2api 参考，非本仓库代码）
 .cache/
+
+# test files: run tests locally, never commit them (repo policy)
+*_test.go
+*.test

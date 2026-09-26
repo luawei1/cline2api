@@ -16,6 +16,14 @@ const clineRecommendedModelsURL = "https://api.cline.bot/api/v1/ai/cline/recomme
 
 const modelSyncTimeout = 10 * time.Second
 
+// clineModelSyncInterval 是 Cline 推荐模型的周期重同步间隔。
+//
+// 上游（Cline 官方）与各 provider 的免费/推荐模型列表每日都会调整：只在进程
+// 启动时同步一次，长期运行的服务会继续拿着已下架的旧列表路由请求——写死在
+// 配置里的模型随之下架失效，每个请求都要先撞一次必败的上游往返。
+// 单次同步只是一个 10s 超时的 GET，每小时一次的成本可忽略；管理后台仍可手动触发。
+const clineModelSyncInterval = time.Hour
+
 // clineRemoteModel 对应接口返回的单个模型字段。
 type clineRemoteModel struct {
 	ID          string   `json:"id"`
@@ -218,13 +226,29 @@ func getModelSyncResult() modelSyncResult {
 	return lastModelSync
 }
 
-// startModelSync 在服务启动时异步同步一次（不阻塞启动）。
+// startModelSync 在服务启动时异步同步一次（不阻塞启动），
+// 之后按 clineModelSyncInterval 周期重同步，让长期运行的进程跟上模型上下架。
 func startModelSync() {
 	go func() {
 		if !modelSyncRan {
 			syncClineModels()
 		}
+		runModelSyncLoop(nil, clineModelSyncInterval, syncClineModels)
 	}()
+}
+
+// runModelSyncLoop 按 interval 周期执行 sync，stop 关闭后返回（测试注入短间隔用）。
+func runModelSyncLoop(stop <-chan struct{}, interval time.Duration, sync func() modelSyncResult) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			sync()
+		}
+	}
 }
 
 // remoteModelsActive 返回远程模型是否已启用（同步成功过）。

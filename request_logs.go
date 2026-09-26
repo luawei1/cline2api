@@ -24,7 +24,8 @@ type RequestLog struct {
 	AccountID      string    `json:"accountId"`
 	AccountEmail   string    `json:"accountEmail"`
 	Protocol       string    `json:"protocol"`
-	// Upstream 标记上游来源："cline"=Cline 账号池，"opencode"=opencode zen 免费模型
+	// Upstream 标记上游来源："cline"=Cline 账号池，"opencode"=opencode zen 免费模型，
+	// "provider"=自定义 OpenAI 兼容 Provider（归因由 stampUpstream 统一判定）
 	Upstream     string `json:"upstream,omitempty"`
 	Model        string `json:"model"`
 	Stream       bool   `json:"stream"`

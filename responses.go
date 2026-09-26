@@ -511,7 +511,7 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 			if fbResp, fbAcc, fbErr, attempted := zenFailoverToCline(chat, isStream); attempted {
 				if fbErr == nil {
 					log.Printf("  responses failover: serving %q via cline pool", chatModel)
-					reqLog.Upstream = upstreamCline
+					stampUpstream(&reqLog, chat) // 归因实际服务方（provider / cline）
 					if fm, ok := chat["model"].(string); ok && fm != "" {
 						reqLog.Model = fm // zen 故障转移后记录实际服务模型
 					}
@@ -574,14 +574,11 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, chatToResponses(out2))
 
 	default: // cline
-		reqLog.Upstream = upstreamCline
 		upResp, acc, err := callClineAPI(chat, isStream)
 		if effectiveModel, ok := chat["model"].(string); ok && effectiveModel != "" {
 			reqLog.Model = effectiveModel // 含回退后的实际服务模型
-			if _, isZen := resolveZenInfo(effectiveModel); isZen {
-				reqLog.Upstream = upstreamOpenCode // zen 反向故障转移后归因 opencode
-			}
 		}
+		stampUpstream(&reqLog, chat) // 归因实际服务方（provider / opencode / cline）
 		if err != nil {
 			log.Printf("  responses api error: %v", err)
 			finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, err.Error())

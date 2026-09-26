@@ -438,12 +438,15 @@ func doFullCapture() error {
 	fmt.Println("  PHASE 6: 测试 Chat API 请求")
 	fmt.Println(strings.Repeat("█", 72))
 
-	chatBody := `{
-		"model": "cline-free/glm-5.2",
+	// 模型动态取当前生效列表（getDefaultModel）：写死的模型 ID 会随上游每日
+	// 调整而下架，导致这个可选测试每次必 404（历史硬编码 cline-free/glm-5.2
+	// 甚至不在内置表里）。
+	chatBody := fmt.Sprintf(`{
+		"model": %q,
 		"messages": [{"role":"user","content":"Hello, say hi"}],
 		"max_tokens": 100,
 		"stream": false
-	}`
+	}`, getDefaultModel())
 
 	_, err = captureRequest(
 		"Cline Chat API Test",

@@ -28,8 +28,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text'
 .layout{display:flex;min-height:100vh}
 
 /* ===== Sidebar ===== */
-.sidebar{width:260px;background:var(--surface);border-right:1px solid var(--border2);padding:0;flex-shrink:0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
-.sidebar-header{padding:20px 20px 16px;border-bottom:1px solid var(--border2)}
+.sidebar{width:260px;background:var(--surface);border-right:1px solid var(--border2);padding:0;flex-shrink:0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden}
+.sidebar-header{padding:20px 20px 16px;border-bottom:1px solid var(--border2);flex-shrink:0}
+.sidebar-nav{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding-bottom:6px}
 .sidebar-header .brand{display:flex;align-items:center;gap:10px}
 .sidebar-header .logo{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#007aff,#5856d6);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:var(--shadow-sm)}
 .sidebar-header .logo svg{width:18px;height:18px;color:#fff}
@@ -44,8 +45,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text'
 .nav-item .nav-label{flex:1}
 .nav-item.dragging{opacity:0.5}
 .nav-item.drop-target{box-shadow:inset 0 2px 0 var(--accent)}
-.sidebar-footer{margin-top:auto;padding:16px 20px;border-top:1px solid var(--border2);font-size:12px;color:var(--text2)}
-.sidebar-lang{padding:0 20px 16px;border-top:1px solid var(--border2)}
+.sidebar-footer{padding:16px 20px;border-top:1px solid var(--border2);font-size:12px;color:var(--text2);flex-shrink:0}
+.sidebar-lang{padding:0 20px 16px;border-top:1px solid var(--border2);flex-shrink:0}
 .sidebar-lang .lang-switch{margin-top:12px}
 .sidebar-footer a{color:var(--accent);text-decoration:none}
 .sidebar-footer a:hover{text-decoration:underline}
@@ -230,6 +231,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
   .sidebar-header .brand-sub,.nav-section-label,.sidebar-footer{display:none}
   .sidebar-lang{padding:0 12px 10px;border-top:none}
   .sidebar-lang .lang-switch{margin-top:10px}
+  .sidebar-nav{flex:none;min-height:0;overflow:visible;padding-bottom:0}
   .nav-section{display:flex;padding:0 10px 12px;gap:4px;overflow-x:auto}
   .nav-item{flex:1;justify-content:center;gap:6px;margin:0;padding:8px 10px;min-width:max-content}
   .nav-item svg{width:18px;height:18px}
@@ -298,6 +300,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
       </div>
     </div>
   </div>
+  <div class="sidebar-nav">
   <div class="nav-section">
     <div class="nav-section-label">概览</div>
     <div class="nav-item active" data-tab="dashboard">
@@ -341,6 +344,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
       <span class="nav-label">关于</span>
     </div>
+  </div>
   </div>
   <div class="sidebar-footer">
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
@@ -2689,7 +2693,7 @@ async function loadRequestLogs(reset) {
         : '-</td><td>-</td><td>-</td><td>-';
       return '<tr>' +
         '<td class="mono" style="font-size:11px">' + ts + '</td>' +
-        '<td>' + esc(l.accountEmail || '-') + '</td>' +
+        '<td>' + esc(l.accountEmail || l.upstream || '-') + '</td>' +
         '<td>' + esc(l.protocol || '-') + '</td>' +
         '<td class="mono" style="font-size:11px">' + esc(l.model || '-') + '</td>' +
         '<td>' + tk + '</td>' +
@@ -2705,7 +2709,7 @@ async function loadRequestLogs(reset) {
         ? t('输入 ') + formatTokenCount(l.inputTokens) + t(' · 输出 ') + formatTokenCount(l.outputTokens) + t(' · 缓存 ') + formatTokenCount(l.cachedTokens) + t(' · 总 ') + formatTokenCount(l.totalTokens)
         : t('Token 未知');
       return '<article class="account-card">' +
-        '<div class="account-card-header"><span class="account-email">' + esc(l.accountEmail || '-') + '</span><span class="log-status ' + (l.completed ? 'ok' : 'fail') + '">' + st + '</span></div>' +
+        '<div class="account-card-header"><span class="account-email">' + esc(l.accountEmail || l.upstream || '-') + '</span><span class="log-status ' + (l.completed ? 'ok' : 'fail') + '">' + st + '</span></div>' +
         '<div class="account-metrics">' +
           '<div class="account-metric"><span class="account-metric-label">' + t('协议') + '</span><span class="account-metric-value">' + esc(l.protocol || '-') + '</span></div>' +
           '<div class="account-metric"><span class="account-metric-label">' + t('耗时') + '</span><span class="account-metric-value">' + formatDuration(l.durationMs) + '</span></div>' +
