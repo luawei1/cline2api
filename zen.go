@@ -669,9 +669,11 @@ func buildZenBody(params map[string]any, stream bool, anonymous bool) map[string
 		wireStream = true
 	}
 	body["stream"] = wireStream
+	// 免费层 agent 形态校验对带 key 的请求同样生效（2026-09-29 实测）：
+	// 核心工具 bash/edit/glob/grep/read 缺一则 403 FreeTierError，这里统一补齐
+	ensureAnonymousTools(body)
 	if anonymous && wireStream {
 		body["stream_options"] = map[string]any{"include_usage": true}
-		ensureAnonymousTools(body)
 	}
 	if model, ok := params["model"].(string); ok {
 		if m, ok := resolveZenInfo(model); ok {
@@ -692,11 +694,26 @@ func buildZenBody(params map[string]any, stream bool, anonymous bool) map[string
 func callZenAPI(params map[string]any, stream bool) (*http.Response, error) {
 	cfg := getZenConfig()
 	anonymous := cfg.Key == "public"
-	bodyJSON, err := json.Marshal(buildZenBody(params, stream, anonymous))
+	// muse-spark 系走 OpenAI Responses 协议（/responses），其余走 chat/completions；
+	// 两条路径统一在返回前转回 chat 协议，调用方无感
+	useResponses := zenUpstreamNeedsResponses(params)
+	protoName := "chat"
+	var bodyJSON []byte
+	var err error
+	if useResponses {
+		protoName = "responses"
+		bodyJSON, err = json.Marshal(buildZenResponsesBody(params))
+	} else {
+		bodyJSON, err = json.Marshal(buildZenBody(params, stream, anonymous))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("marshal zen body: %w", err)
 	}
-	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
+	zenPath := "/chat/completions"
+	if useResponses {
+		zenPath = "/responses"
+	}
+	endpoint := strings.TrimRight(cfg.BaseURL, "/") + zenPath
 
 	zenStateMu.Lock()
 	sem := zenSem
@@ -752,8 +769,8 @@ func callZenAPI(params map[string]any, stream bool) (*http.Response, error) {
 				req.Header.Set("x-opencode-model", m.ID)
 			}
 		}
-		log.Printf("  zen upstream: model=%v stream=%v(下游=%v) msgs=%d via=%s attempt=%d session=%s",
-			bodyParamsModel(params), anonymous, stream, getMsgCount(params), describeZenProxy(), attempt+1, truncate(sess, 30))
+		log.Printf("  zen upstream: model=%v proto=%s stream=%v(下游=%v) msgs=%d via=%s attempt=%d session=%s",
+			bodyParamsModel(params), protoName, anonymous, stream, getMsgCount(params), describeZenProxy(), attempt+1, truncate(sess, 30))
 
 		// 响应头看门狗：黑洞场景（TCP 通、握手/响应头静默丢弃）请求会永久挂起，
 		// 且 callZenAPI 不返回则 markZenFail 不触发、故障转移永远无法激活。
@@ -787,6 +804,13 @@ func callZenAPI(params map[string]any, stream bool) (*http.Response, error) {
 		watchdog.Stop()
 		if resp.StatusCode == http.StatusOK {
 			markZenSuccess()
+			if useResponses {
+				// Responses 上游统一流式：下游要 SSE 时转写成 chat chunk，要 JSON 时折叠
+				if stream {
+					return streamZenResponsesAsChat(resp, zenUpstreamModelID(params), watchCancel), nil
+				}
+				return collapseZenResponsesStream(resp, zenUpstreamModelID(params), watchCancel)
+			}
 			if anonymous && !stream {
 				// 折叠路径内部会关闭 body（连带释放 watchCtx）
 				return collapseZenStreamResponse(resp, bodyParamsModel(params))
@@ -944,7 +968,13 @@ func collapseZenStreamResponse(resp *http.Response, model string) (*http.Respons
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("zen stream read: %w", err)
 	}
+	log.Printf("  zen collapse: stream -> json (content_len=%d tool_calls=%d)", len(acc.Content), len(acc.ToolCalls))
+	return zenCollapseToChatResponse(acc, resp.Request)
+}
 
+// zenCollapseToChatResponse 把折叠累计器组装成等价的单个 chat.completion JSON 响应。
+// 供 chat SSE 与 Responses 事件流两条折叠路径复用。
+func zenCollapseToChatResponse(acc *zenCollapseAcc, req *http.Request) (*http.Response, error) {
 	msg := map[string]any{"role": "assistant", "content": acc.Content}
 	if acc.Reasoning != "" {
 		msg["reasoning_content"] = acc.Reasoning
@@ -987,7 +1017,6 @@ func collapseZenStreamResponse(resp *http.Response, model string) (*http.Respons
 	if err != nil {
 		return nil, fmt.Errorf("collapse zen stream: %w", err)
 	}
-	log.Printf("  zen collapse: stream -> json (content_len=%d tool_calls=%d)", len(acc.Content), len(acc.ToolCalls))
 	return &http.Response{
 		Status:        "200 OK",
 		StatusCode:    http.StatusOK,
@@ -997,7 +1026,7 @@ func collapseZenStreamResponse(resp *http.Response, model string) (*http.Respons
 		Header:        http.Header{"Content-Type": []string{"application/json"}},
 		Body:          io.NopCloser(bytes.NewReader(data)),
 		ContentLength: int64(len(data)),
-		Request:       resp.Request,
+		Request:       req,
 	}, nil
 }
 
@@ -1269,4 +1298,558 @@ func opencodeUsageToday() map[string]any {
 		"outputTokens": output,
 		"totalTokens":  total,
 	}
+}
+
+// ============ Responses 协议上游（muse-spark 系） ============
+// 对齐 opencode 官方端点表（opencode.ai/docs/zen）：GPT/Grok/Muse Spark 走
+// OpenAI Responses 协议（POST /responses），Claude/Qwen → Anthropic，其余 →
+// chat/completions。当前免费层只有 muse-spark 系命中 Responses；
+// 参考实现：sub2api DefaultOpenCodeZenProtocolRules。
+// 上游统一流式（Responses SSE），下游要 chat SSE 时逐事件转写，要 JSON 时折叠。
+
+// zenResponsesModelPrefixes 需要 Responses 协议的 zen 模型前缀（gpt-* / grok-* 预留）。
+var zenResponsesModelPrefixes = []string{"muse-spark-"}
+
+func zenModelUsesResponses(modelID string) bool {
+	for _, p := range zenResponsesModelPrefixes {
+		if strings.HasPrefix(modelID, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// zenUpstreamModelID 返回请求模型对应的 zen 正式 ID（未解析到时去掉 opencode/ 前缀）。
+func zenUpstreamModelID(params map[string]any) string {
+	m, _ := params["model"].(string)
+	if m == "" {
+		return m
+	}
+	if zm, ok := resolveZenInfo(m); ok {
+		return zm.ID
+	}
+	return strings.TrimPrefix(m, "opencode/")
+}
+
+func zenUpstreamNeedsResponses(params map[string]any) bool {
+	return zenModelUsesResponses(zenUpstreamModelID(params))
+}
+
+// buildZenResponsesBody 把下游 chat 参数构造成 Responses 请求体。
+// 匿名免费层的 agent 形态要求（强制流式 + 核心工具）同样适用于该协议。
+func buildZenResponsesBody(params map[string]any) map[string]any {
+	body := map[string]any{"stream": true}
+	body["model"] = zenUpstreamModelID(params)
+	// max_tokens → max_output_tokens；Meta 系上游要求 >= 16，推理模型预算太小
+	// 会全耗在 reasoning 上产出空内容，低于下限兜到默认值（同 buildUpstreamBody 约定）。
+	// 客户端未指定时不带该字段，交由上游取模型默认。
+	// chat 请求经 json.Unmarshal 是 float64，responses/anthropic 转换路径是 int，宽松读取。
+	for _, k := range []string{"max_tokens", "max_completion_tokens"} {
+		n := zenInt64(params[k])
+		if n <= 0 {
+			continue
+		}
+		if n < minUpstreamMaxTokens {
+			log.Printf("  zen clamp max_output_tokens=%d -> %d (upstream requires >= %d)", n, defaultMaxTokens, minUpstreamMaxTokens)
+			n = defaultMaxTokens
+		}
+		body["max_output_tokens"] = n
+		break
+	}
+	if v, ok := params["temperature"]; ok {
+		body["temperature"] = v
+	}
+	if v, ok := params["top_p"]; ok {
+		body["top_p"] = v
+	}
+
+	// tools：先在 chat 嵌套形态上补齐核心工具（免费层 agent 形态校验对
+	// 带 key 的请求同样生效），再转 Responses 扁平格式
+	pseudo := map[string]any{}
+	if raw, ok := params["tools"]; ok {
+		pseudo["tools"] = raw
+	}
+	ensureAnonymousTools(pseudo)
+	if rawTools, ok := pseudo["tools"].([]any); ok && len(rawTools) > 0 {
+		flat := make([]any, 0, len(rawTools))
+		for _, t := range rawTools {
+			tm, ok := t.(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, _ := tm["function"].(map[string]any)
+			if fn == nil {
+				continue
+			}
+			flat = append(flat, map[string]any{
+				"type":        "function",
+				"name":        fn["name"],
+				"description": fn["description"],
+				"parameters":  fn["parameters"],
+			})
+		}
+		if len(flat) > 0 {
+			body["tools"] = flat
+		}
+	}
+	switch tc := params["tool_choice"].(type) {
+	case string:
+		body["tool_choice"] = tc
+	case map[string]any:
+		fn, _ := tc["function"].(map[string]any)
+		if name, _ := fn["name"].(string); name != "" {
+			body["tool_choice"] = map[string]any{"type": "function", "name": name}
+		}
+	}
+
+	// messages → instructions（system）+ input（对话与工具往返）
+	var instr []string
+	input := make([]any, 0, 16)
+	if msgs, ok := params["messages"].([]any); ok {
+		for _, m := range sanitizeMessages(msgs) {
+			mm, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch role, _ := mm["role"].(string); role {
+			case "system", "developer":
+				if s := stringifyResponsesContent(mm["content"]); s != "" {
+					instr = append(instr, s)
+				}
+			case "tool":
+				input = append(input, map[string]any{
+					"type":    "function_call_output",
+					"call_id": mm["tool_call_id"],
+					"output":  stringifyResponsesContent(mm["content"]),
+				})
+			case "assistant":
+				if tcs, ok := mm["tool_calls"].([]any); ok {
+					for _, tc := range tcs {
+						cm, ok := tc.(map[string]any)
+						if !ok {
+							continue
+						}
+						fn, _ := cm["function"].(map[string]any)
+						if fn == nil {
+							continue
+						}
+						args, _ := fn["arguments"].(string)
+						if args == "" {
+							if am, ok := fn["arguments"].(map[string]any); ok {
+								if b, err := json.Marshal(am); err == nil {
+									args = string(b)
+								}
+							}
+						}
+						input = append(input, map[string]any{
+							"type":      "function_call",
+							"call_id":   cm["id"],
+							"name":      fn["name"],
+							"arguments": args,
+						})
+					}
+				}
+				if s := stringifyResponsesContent(mm["content"]); s != "" {
+					input = append(input, map[string]any{"type": "message", "role": "assistant", "content": s})
+				}
+			default: // user
+				input = append(input, map[string]any{
+					"type":    "message",
+					"role":    "user",
+					"content": zenChatContentToResponsesInput(mm["content"]),
+				})
+			}
+		}
+	}
+	if len(instr) > 0 {
+		body["instructions"] = strings.Join(instr, "\n\n")
+	}
+	body["input"] = input
+	return body
+}
+
+// zenChatContentToResponsesInput 把 chat content 转成 Responses 输入内容：
+// 字符串原样；部件数组映射 text → input_text、image_url → input_image。
+func zenChatContentToResponsesInput(content any) any {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		parts := make([]any, 0, len(v))
+		for _, p := range v {
+			pm, ok := p.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch pm["type"] {
+			case "text":
+				if t, _ := pm["text"].(string); t != "" {
+					parts = append(parts, map[string]any{"type": "input_text", "text": t})
+				}
+			case "image_url":
+				iu, _ := pm["image_url"].(map[string]any)
+				if u, _ := iu["url"].(string); u != "" {
+					parts = append(parts, map[string]any{"type": "input_image", "image_url": u})
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return parts
+		}
+	}
+	return ""
+}
+
+// zenInt64 宽松地把 JSON 数值转成 int64。
+func zenInt64(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return i
+	}
+	return 0
+}
+
+// zenResponsesUsage 把 Responses usage（input_tokens/output_tokens）映射为 tokenUsage。
+func zenResponsesUsage(raw any) tokenUsage {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return tokenUsage{}
+	}
+	u := tokenUsage{Valid: true}
+	u.Prompt = zenInt64(m["input_tokens"])
+	u.Completion = zenInt64(m["output_tokens"])
+	u.Total = zenInt64(m["total_tokens"])
+	if u.Total == 0 {
+		u.Total = u.Prompt + u.Completion
+	}
+	if d, ok := m["input_tokens_details"].(map[string]any); ok {
+		u.Cached = zenInt64(d["cached_tokens"])
+	}
+	return u
+}
+
+// scanSSEData 逐条读取 SSE data: 载荷并回调（忽略 event:/注释行与 [DONE]）。
+func scanSSEData(src io.Reader, handle func(obj map[string]any)) error {
+	scanner := bufio.NewScanner(src)
+	scanner.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(line[5:])
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var obj map[string]any
+		if json.Unmarshal([]byte(payload), &obj) != nil {
+			continue
+		}
+		handle(obj)
+	}
+	return scanner.Err()
+}
+
+// zenResponsesSink 消费 Responses 事件流的统一出口：流式转写与折叠两种实现。
+// itemID 唯一标识一个 function_call 输出项；final=true 的 args 为权威全量参数。
+type zenResponsesSink interface {
+	open(id, model string)
+	content(text string)
+	reasoning(text string)
+	toolStart(itemID, callID, name string)
+	toolArgs(itemID, args string, final bool)
+	done(model, status string, usage tokenUsage)
+}
+
+// pumpZenResponsesEvents 解析 Responses SSE 事件并驱动 sink。
+func pumpZenResponsesEvents(src io.Reader, sink zenResponsesSink) error {
+	opened := false
+	return scanSSEData(src, func(obj map[string]any) {
+		evType, _ := obj["type"].(string)
+		resp, _ := obj["response"].(map[string]any)
+		switch evType {
+		case "response.created":
+			if !opened && resp != nil {
+				opened = true
+				id, _ := resp["id"].(string)
+				model, _ := resp["model"].(string)
+				sink.open(id, model)
+			}
+		case "response.output_text.delta":
+			if d, _ := obj["delta"].(string); d != "" {
+				sink.content(d)
+			}
+		case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+			if d, _ := obj["delta"].(string); d != "" {
+				sink.reasoning(d)
+			}
+		case "response.output_item.added":
+			item, _ := obj["item"].(map[string]any)
+			if it, _ := item["type"].(string); it == "function_call" {
+				itemID, _ := item["id"].(string)
+				callID, _ := item["call_id"].(string)
+				name, _ := item["name"].(string)
+				sink.toolStart(itemID, callID, name)
+			}
+		case "response.function_call_arguments.delta":
+			itemID, _ := obj["item_id"].(string)
+			if d, _ := obj["delta"].(string); d != "" {
+				sink.toolArgs(itemID, d, false)
+			}
+		case "response.function_call_arguments.done":
+			itemID, _ := obj["item_id"].(string)
+			args, _ := obj["arguments"].(string)
+			sink.toolArgs(itemID, args, true)
+		case "response.completed", "response.incomplete", "response.failed":
+			model := ""
+			var usage tokenUsage
+			if resp != nil {
+				model, _ = resp["model"].(string)
+				usage = zenResponsesUsage(resp["usage"])
+			}
+			sink.done(model, strings.TrimPrefix(evType, "response."), usage)
+		}
+	})
+}
+
+// zenChatChunkSink 把 Responses 事件流实时转写成 chat.completion.chunk SSE。
+type zenChatChunkSink struct {
+	w        io.Writer
+	id       string
+	created  int64
+	model    string
+	toolIdx  map[string]int
+	toolSeen map[string]bool
+	toolN    int
+	hasTools bool
+	err      error
+}
+
+func (s *zenChatChunkSink) write(chunk map[string]any) {
+	if s.err != nil {
+		return
+	}
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		s.err = err
+		return
+	}
+	_, s.err = fmt.Fprintf(s.w, "data: %s\n\n", b)
+}
+
+func (s *zenChatChunkSink) chunk(delta map[string]any, finish any) {
+	s.write(map[string]any{
+		"id":      s.id,
+		"object":  "chat.completion.chunk",
+		"created": s.created,
+		"model":   s.model,
+		"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}},
+	})
+}
+
+func (s *zenChatChunkSink) open(id, model string) {
+	if id != "" {
+		s.id = id
+	}
+	if model != "" {
+		s.model = model
+	}
+	s.chunk(map[string]any{"role": "assistant", "content": ""}, nil)
+}
+
+func (s *zenChatChunkSink) content(text string) {
+	s.chunk(map[string]any{"content": text}, nil)
+}
+
+func (s *zenChatChunkSink) reasoning(text string) {
+	s.chunk(map[string]any{"reasoning_content": text}, nil)
+}
+
+func (s *zenChatChunkSink) toolStart(itemID, callID, name string) {
+	idx := s.toolN
+	s.toolN++
+	if itemID == "" {
+		itemID = fmt.Sprintf("tc_%d", idx)
+	}
+	s.toolIdx[itemID] = idx
+	s.hasTools = true
+	s.chunk(map[string]any{"tool_calls": []any{map[string]any{
+		"index": idx, "id": callID, "type": "function",
+		"function": map[string]any{"name": name, "arguments": ""},
+	}}}, nil)
+}
+
+func (s *zenChatChunkSink) toolArgs(itemID, args string, final bool) {
+	idx, ok := s.toolIdx[itemID]
+	if !ok {
+		// 没有配对 start 事件时无法构造合法 tool_call（空名会被客户端当畸形丢弃），放弃
+		return
+	}
+	if final {
+		if s.toolSeen[itemID] {
+			return // 增量已发过完整参数，done 事件冗余
+		}
+	} else {
+		s.toolSeen[itemID] = true
+	}
+	s.chunk(map[string]any{"tool_calls": []any{map[string]any{
+		"index": idx, "function": map[string]any{"arguments": args},
+	}}}, nil)
+}
+
+func (s *zenChatChunkSink) done(model, status string, usage tokenUsage) {
+	if model != "" {
+		s.model = model
+	}
+	if status == "failed" {
+		log.Printf("  zen responses: upstream reported failure mid-stream")
+	}
+	finish := "stop"
+	if status == "incomplete" {
+		finish = "length"
+	} else if s.hasTools && status == "completed" {
+		finish = "tool_calls"
+	}
+	s.chunk(map[string]any{}, finish)
+	if usage.Valid {
+		s.write(map[string]any{
+			"id":      s.id,
+			"object":  "chat.completion.chunk",
+			"created": s.created,
+			"model":   s.model,
+			"choices": []any{},
+			"usage": map[string]any{
+				"prompt_tokens":         usage.Prompt,
+				"completion_tokens":     usage.Completion,
+				"total_tokens":          usage.Total,
+				"prompt_tokens_details": map[string]any{"cached_tokens": usage.Cached},
+			},
+		})
+	}
+	if s.err == nil {
+		_, s.err = fmt.Fprint(s.w, "data: [DONE]\n\n")
+	}
+}
+
+// zenChatAccSink 折叠实现：把 Responses 事件流累计成 chat.completion 结构。
+type zenChatAccSink struct {
+	acc     *zenCollapseAcc
+	toolIdx map[string]int
+}
+
+func (s *zenChatAccSink) open(id, model string) {
+	if id != "" {
+		s.acc.ID = id
+	}
+	if model != "" {
+		s.acc.Model = model
+	}
+}
+
+func (s *zenChatAccSink) content(text string) {
+	s.acc.Content += text
+}
+
+func (s *zenChatAccSink) reasoning(text string) {
+	s.acc.Reasoning += text
+}
+
+func (s *zenChatAccSink) toolStart(itemID, callID, name string) {
+	idx := len(s.acc.ToolCalls)
+	s.acc.ToolCalls = append(s.acc.ToolCalls, zenCollapseTool{ID: callID, Name: name})
+	if itemID == "" {
+		itemID = fmt.Sprintf("tc_%d", idx)
+	}
+	s.toolIdx[itemID] = idx
+}
+
+func (s *zenChatAccSink) toolArgs(itemID, args string, final bool) {
+	idx, ok := s.toolIdx[itemID]
+	if !ok || idx >= len(s.acc.ToolCalls) {
+		return
+	}
+	if final {
+		// done 事件携带权威全量参数：非空即覆盖，防增量分片丢失导致参数截断
+		if args != "" {
+			s.acc.ToolCalls[idx].Arguments = args
+		}
+		return
+	}
+	s.acc.ToolCalls[idx].Arguments += args
+}
+
+func (s *zenChatAccSink) done(model, status string, usage tokenUsage) {
+	if model != "" {
+		s.acc.Model = model
+	}
+	switch status {
+	case "incomplete":
+		s.acc.FinishReason = "length"
+	case "completed":
+		if len(s.acc.ToolCalls) > 0 {
+			s.acc.FinishReason = "tool_calls"
+		} else {
+			s.acc.FinishReason = "stop"
+		}
+	default:
+		s.acc.FinishReason = "stop"
+	}
+	if usage.Valid {
+		s.acc.Usage = usage
+	}
+}
+
+// streamZenResponsesAsChat 把上游 Responses SSE 实时转写成 chat.completion.chunk SSE。
+// 转写 goroutine 拥有上游 body 与 watchdog ctx 的生命周期：结束时一并释放；
+// 下游断开会导致写管道失败，同样触发释放。
+func streamZenResponsesAsChat(resp *http.Response, model string, cancel context.CancelFunc) *http.Response {
+	pr, pw := io.Pipe()
+	go func() {
+		sink := &zenChatChunkSink{
+			w:        pw,
+			id:       "chatcmpl-" + randHex(12),
+			created:  time.Now().Unix(),
+			model:    model,
+			toolIdx:  map[string]int{},
+			toolSeen: map[string]bool{},
+		}
+		err := pumpZenResponsesEvents(resp.Body, sink)
+		if sink.err != nil {
+			err = sink.err
+		}
+		resp.Body.Close()
+		cancel()
+		pw.CloseWithError(err)
+	}()
+	return &http.Response{
+		Status:        "200 OK",
+		StatusCode:    http.StatusOK,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:          pr,
+		ContentLength: -1,
+		Request:       resp.Request,
+	}
+}
+
+// collapseZenResponsesStream 消费 Responses 事件流，折叠成单个 chat.completion JSON 响应。
+func collapseZenResponsesStream(resp *http.Response, model string, cancel context.CancelFunc) (*http.Response, error) {
+	defer resp.Body.Close()
+	defer cancel()
+	acc := &zenCollapseAcc{Model: model, Created: time.Now().Unix()}
+	sink := &zenChatAccSink{acc: acc, toolIdx: map[string]int{}}
+	if err := pumpZenResponsesEvents(resp.Body, sink); err != nil {
+		return nil, fmt.Errorf("zen responses stream read: %w", err)
+	}
+	log.Printf("  zen responses collapse: stream -> json (content_len=%d tool_calls=%d)", len(acc.Content), len(acc.ToolCalls))
+	return zenCollapseToChatResponse(acc, resp.Request)
 }
