@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,9 @@ const (
 	freeModelPrimary       = "z-ai/glm-5.3-flash"
 	freeModelFallback      = "deepseek/deepseek-v4-flash"
 	freeModelLastResort    = "cline-free/longcat-2.0"
+	// maxUpstreamToolNameLength 上游对工具 function.name 的长度上限：OpenRouter 的
+	// Meta provider 硬限 `name` ≤64 字符，超长请求间歇性 400（取决于轮询到的后端）。
+	maxUpstreamToolNameLength = 64
 )
 
 // minUpstreamMaxTokens 上游对输出 token 的硬下限：Cline 免费模型经 OpenRouter
@@ -507,6 +511,8 @@ func startProxy(host string, port int) error {
 			}
 			resp, err := callZenAPI(params, isStream)
 			if err != nil {
+				// zen 故障转移到 Cline 池：先截短超长工具名（Meta 后端硬限 ≤64）
+				reqLog.toolNames = clampParamsToolNames(params)
 				if fbResp, fbAcc, fbErr, attempted := zenFailoverToCline(params, isStream); attempted {
 					if fbErr == nil {
 						log.Printf("  chat failover: serving %q via cline pool", model)
@@ -552,6 +558,8 @@ func startProxy(host string, port int) error {
 			return
 		}
 
+		// Cline 通道：截短超长工具名并记录映射，回程由响应处理器还原（Meta 后端硬限 ≤64）
+		reqLog.toolNames = clampParamsToolNames(params)
 		resp, acc, err := callClineAPI(params, isStream)
 		if effectiveModel, ok := params["model"].(string); ok && effectiveModel != "" {
 			reqLog.Model = effectiveModel // 含回退后的实际服务模型
@@ -677,6 +685,127 @@ func cleanMessages(messages []any) []any {
 		cleaned = append(cleaned, msg)
 	}
 	return cleaned
+}
+
+// shortenToolName 把超长工具名确定性截短到 ≤64 字符：前 55 字节 + "_" + 8 位 sha256。
+// 确定性保证同一原始名跨请求映射稳定，多轮历史中的 tool_calls 名称不会漂移。
+func shortenToolName(orig string) string {
+	sum := sha256.Sum256([]byte(orig))
+	return fmt.Sprintf("%.55s_%x", orig, sum[:4])
+}
+
+// clampParamsToolNames 把 Cline 请求里超过 64 字符的工具名截短：tools 定义与
+// 历史 assistant tool_calls 同步改写（保留 tool_call_id 关联，OpenAI 协议按 id 配对）。
+// 返回 短→原始 映射存入 reqLog 供回程还原；无超长名时返回 nil。
+// 每请求只在入口调用一次，重试/故障转移链复用已改写的 params，不重复调用。
+func clampParamsToolNames(params map[string]any) map[string]string {
+	shortToOrig := map[string]string{}
+	clamped := false
+	ensure := func(orig string) string {
+		if len(orig) <= maxUpstreamToolNameLength {
+			return orig
+		}
+		short := shortenToolName(orig)
+		shortToOrig[short] = orig
+		clamped = true
+		return short
+	}
+	renameToolCalls := func(tcs []any) {
+		for _, tc := range tcs {
+			tcm, ok := tc.(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, ok := tcm["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, _ := fn["name"].(string); name != "" {
+				fn["name"] = ensure(name)
+			}
+		}
+	}
+	if tools, ok := params["tools"].([]any); ok {
+		for _, t := range tools {
+			tm, ok := t.(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, ok := tm["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, _ := fn["name"].(string); name != "" {
+				fn["name"] = ensure(name)
+			}
+		}
+	}
+	if msgs, ok := params["messages"].([]any); ok {
+		for _, mv := range msgs {
+			mm, ok := mv.(map[string]any)
+			if !ok {
+				continue
+			}
+			if tcs, ok := mm["tool_calls"].([]any); ok {
+				renameToolCalls(tcs)
+			}
+		}
+	}
+	// tool_choice 指定函数名时同样受限；响应不回显该字段，无需还原
+	if tcChoice, ok := params["tool_choice"].(map[string]any); ok {
+		if fn, ok := tcChoice["function"].(map[string]any); ok {
+			if name, _ := fn["name"].(string); name != "" {
+				fn["name"] = ensure(name)
+			}
+		}
+	}
+	if !clamped {
+		return nil
+	}
+	return shortToOrig
+}
+
+// restoreToolCallsInResponse 把上游响应里被截短的工具名还原为客户端原始名，
+// 覆盖流式 delta 与非流式 message 两种形态；映射为空时是 no-op。
+func restoreToolCallsInResponse(obj map[string]any, shortToOrig map[string]string) {
+	if obj == nil || len(shortToOrig) == 0 {
+		return
+	}
+	choices, ok := obj["choices"].([]any)
+	if !ok {
+		return
+	}
+	for _, c := range choices {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"delta", "message"} {
+			d, ok := cm[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			tcs, ok := d["tool_calls"].([]any)
+			if !ok {
+				continue
+			}
+			for _, tc := range tcs {
+				tcm, ok := tc.(map[string]any)
+				if !ok {
+					continue
+				}
+				fn, ok := tcm["function"].(map[string]any)
+				if !ok {
+					continue
+				}
+				if name, _ := fn["name"].(string); name != "" {
+					if orig, ok := shortToOrig[name]; ok {
+						fn["name"] = orig
+					}
+				}
+			}
+		}
+	}
 }
 
 // sanitizeMessages 修复出站消息历史中的畸形 tool_calls。
@@ -1773,6 +1902,7 @@ func handleStreamResponse(w http.ResponseWriter, upstream *http.Response, acc *A
 					}
 				}
 				normalized := normalizeOpenAIResponse(obj)
+				restoreToolCallsInResponse(normalized, reqLog.toolNames)
 				if usage := parseTokenUsage(normalized["usage"]); usage.Valid {
 					latestUsage = mergeTokenUsage(latestUsage, usage)
 				}
@@ -1841,6 +1971,7 @@ func handleNonStreamResponse(w http.ResponseWriter, upstream *http.Response, acc
 	}
 
 	out = normalizeOpenAIResponse(out)
+	restoreToolCallsInResponse(out, reqLog.toolNames)
 	usage := parseTokenUsage(out["usage"])
 	recordTokenUsage(acc, reqLog.Model, usage)
 	finalizeRequestLog(reqLog, usage, time.Time{}, reqLog.StartedAt, true, "")
@@ -2296,6 +2427,8 @@ func handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, err := callZenAPI(openAIReq, req.Stream)
 		if err != nil {
+			// zen 故障转移到 Cline 池：先截短超长工具名（Meta 后端硬限 ≤64）
+			reqLog.toolNames = clampParamsToolNames(openAIReq)
 			if fbResp, fbAcc, fbErr, attempted := zenFailoverToCline(openAIReq, req.Stream); attempted {
 				if fbErr == nil {
 					log.Printf("  anthropic failover: serving %q via cline pool", req.Model)
@@ -2329,6 +2462,7 @@ func handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 						usage := parseTokenUsage(out2["usage"])
 						recordTokenUsage(fbAcc, reqLog.Model, usage)
 						finalizeRequestLog(&reqLog, usage, time.Time{}, reqLog.StartedAt, true, "")
+						restoreToolCallsInResponse(out2, reqLog.toolNames)
 						anthropicResp := openAIToAnthropic(out2)
 						if hasToolUseBlocks(anthropicResp["content"]) {
 							anthropicResp["stop_reason"] = "tool_use"
@@ -2408,6 +2542,8 @@ func handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cline 通道：截短超长工具名并记录映射，回程由响应处理器还原（Meta 后端硬限 ≤64）
+	reqLog.toolNames = clampParamsToolNames(openAIReq)
 	resp, acc, err := callClineAPI(openAIReq, req.Stream)
 	if effectiveModel, ok := openAIReq["model"].(string); ok && effectiveModel != "" {
 		reqLog.Model = effectiveModel // 含回退后的实际服务模型
@@ -2446,6 +2582,7 @@ func handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		usage := parseTokenUsage(out["usage"])
 		recordTokenUsage(acc, reqLog.Model, usage)
 		finalizeRequestLog(&reqLog, usage, time.Time{}, reqLog.StartedAt, true, "")
+		restoreToolCallsInResponse(out, reqLog.toolNames)
 		anthropicResp := openAIToAnthropic(out)
 
 		if hasToolUseBlocks(anthropicResp["content"]) {
@@ -2826,8 +2963,7 @@ L:
 					log.Printf("  anthropic stream: upstream sent empty stream before any content")
 					return false
 				}
-				continue
-			}
+				continue			}
 
 			var obj map[string]any
 			if err := json.Unmarshal([]byte(payload), &obj); err != nil {
@@ -2860,6 +2996,9 @@ L:
 				finalizeRequestLog(reqLog, latestUsage, firstOutputAt, reqLog.StartedAt, false, "upstream error: "+string(errBody))
 				return true
 			}
+
+			// 上游被截短的工具名还原为客户端原始名
+			restoreToolCallsInResponse(obj, reqLog.toolNames)
 
 			if !committed {
 				commit() // 首条有效数据行到达，提交响应头 + message_start
