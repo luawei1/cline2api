@@ -480,9 +480,34 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
       <div class="num" id="statOcOutputTokens">-</div><div class="label">今日输出 Token</div>
     </div>
     <div class="card yellow">
-      <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
       <div class="num" id="statOcTotalTokens">-</div><div class="label">今日总 Token</div>
     </div>
+    </div>
+  </div>
+  <div class="metric-section">
+    <div class="metric-heading" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <span>模型用量统计</span>
+      <span style="display:flex;gap:6px">
+        <button class="btn btn-sm" id="modelUsageBtnToday" onclick="switchModelUsageRange('today')">今日</button>
+        <button class="btn btn-sm" id="modelUsageBtnAll" onclick="switchModelUsageRange('all')">累计</button>
+      </span>
+    </div>
+    <div class="section-body" style="margin-top:10px">
+      <table>
+        <thead><tr>
+          <th style="width:32%">模型</th>
+          <th style="width:14%">通道</th>
+          <th style="width:10%;text-align:right">请求数</th>
+          <th style="width:11%;text-align:right">输入</th>
+          <th style="width:11%;text-align:right">输出</th>
+          <th style="width:11%;text-align:right">缓存</th>
+          <th style="width:11%;text-align:right">总计</th>
+        </tr></thead>
+        <tbody id="modelUsageBody">
+          <tr><td colspan="7" class="empty">加载中...</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
   <div class="section">
@@ -1394,6 +1419,12 @@ const I18N = {
   '同步中...': 'Syncing...',
   '暂无模型': 'No models',
   '模型统计': 'Model Usage',
+  '模型用量统计': 'Model Usage Stats',
+  '通道': 'Channel',
+  '请求数': 'Requests',
+  '总计': 'Total',
+  '今日': 'Today',
+  '累计': 'All time',
   '按模型统计（仅免费模型）': 'Per-model usage (free models)',
   '免费模型': 'Free models',
   '展开': 'Expand',
@@ -1811,12 +1842,54 @@ async function loadStats() {
     _('statOcInputTokens').textContent = formatTokenCount(oc.inputTokens || 0);
     _('statOcOutputTokens').textContent = formatTokenCount(oc.outputTokens || 0);
     _('statOcTotalTokens').textContent = formatTokenCount(oc.totalTokens || 0);
+    lastModelUsage = s.modelUsage || [];
+    renderModelUsage();
     if (s.version) _('settingVersion').value = s.version;
     // 设置项由 /config 返回为准；这里仅在用户未编辑时回填，避免轮询清掉正在输入的内容
     const fillIfIdle = (id, val) => { const el = _(id); if (el && document.activeElement !== el && !el.dataset.dirty) el.value = val; };
     if (s.strategy) fillIfIdle('settingStrategy', s.strategy);
     fillIfIdle('settingModelChain', (s.modelChain || []).join(', '));
   } catch (e) { /* ignore */ }
+}
+
+// ========== 模型用量统计 ==========
+let lastModelUsage = [];
+let modelUsageRange = 'today';
+
+function switchModelUsageRange(range) {
+  modelUsageRange = range;
+  renderModelUsage();
+}
+
+function renderModelUsage() {
+  const tbody = _('modelUsageBody');
+  if (!tbody) return;
+  _('modelUsageBtnToday').style.borderColor = modelUsageRange === 'today' ? 'var(--accent)' : '';
+  _('modelUsageBtnToday').style.color = modelUsageRange === 'today' ? 'var(--accent)' : '';
+  _('modelUsageBtnAll').style.borderColor = modelUsageRange === 'all' ? 'var(--accent)' : '';
+  _('modelUsageBtnAll').style.color = modelUsageRange === 'all' ? 'var(--accent)' : '';
+  if (!lastModelUsage.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">' + t('暂无数据') + '</td></tr>';
+    return;
+  }
+  const upNames = { cline: 'Cline', opencode: 'Zen' };
+  tbody.innerHTML = lastModelUsage.map(m => {
+    const today = modelUsageRange === 'today';
+    const req = today ? m.todayRequests : m.requests;
+    const input = today ? m.todayInputTokens : m.inputTokens;
+    const output = today ? m.todayOutputTokens : m.outputTokens;
+    const total = today ? m.todayTotalTokens : m.totalTokens;
+    const ups = String(m.upstream || '').split('/').map(u => upNames[u] || u).join('/');
+    return '<tr>' +
+      '<td class="mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.model) + '</td>' +
+      '<td style="color:var(--text2)">' + esc(ups) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums">' + formatNumber(req) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums">' + formatTokenCount(input) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums">' + formatTokenCount(output) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums">' + formatTokenCount(m.cachedTokens) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600">' + formatTokenCount(total) + '</td>' +
+      '</tr>';
+  }).join('');
 }
 
 // ========== 账号管理 ==========

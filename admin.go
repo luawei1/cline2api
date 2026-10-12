@@ -1483,6 +1483,8 @@ func handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			"version":          appVersion,
 			// opencode zen 免费模型今日用量（从请求日志聚合）
 			"opencodeToday": opencodeUsageToday(),
+			// 按模型聚合的用量（累计 + 今日，仪表盘「模型用量统计」）
+			"modelUsage": modelUsageStats(),
 		},
 	})
 }
