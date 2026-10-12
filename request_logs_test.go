@@ -86,3 +86,41 @@ func TestParseTokenUsageCachePrecedence(t *testing.T) {
 		t.Fatalf("expected prompt=100, got %d", usage.Prompt)
 	}
 }
+
+func TestModelUsageStats(t *testing.T) {
+	now := time.Now()
+	yesterday := now.Add(-24 * time.Hour)
+	requestLogsMu.Lock()
+	requestLogs = []RequestLog{
+		// 模型 A：今日 2 次 + 昨日 1 次，两个上游（故障转移场景）
+		{ID: "a1", Model: "mimo-v2.6-flash-free", Upstream: "opencode", StartedAt: now, InputTokens: 100, OutputTokens: 50, CachedTokens: 10, TotalTokens: 150},
+		{ID: "a2", Model: "mimo-v2.6-flash-free", Upstream: "opencode", StartedAt: now, InputTokens: 200, OutputTokens: 80, CachedTokens: 0, TotalTokens: 280},
+		{ID: "a3", Model: "mimo-v2.6-flash-free", Upstream: "cline", StartedAt: yesterday, InputTokens: 10, OutputTokens: 5, CachedTokens: 0, TotalTokens: 15},
+		// 模型 B：仅昨日
+		{ID: "b1", Model: "cline-free/mimo-v2.6-flash", Upstream: "cline", StartedAt: yesterday, InputTokens: 7, OutputTokens: 3, CachedTokens: 0, TotalTokens: 10},
+	}
+	requestLogsMu.Unlock()
+
+	got := modelUsageStats()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 models, got %d: %+v", len(got), got)
+	}
+	// 按累计总 Token 降序：A(445) 在前
+	if got[0].Model != "mimo-v2.6-flash-free" {
+		t.Fatalf("expected model A first, got %s", got[0].Model)
+	}
+	a := got[0]
+	if a.Requests != 3 || a.InputTokens != 310 || a.OutputTokens != 135 || a.TotalTokens != 445 {
+		t.Fatalf("A cumulative wrong: %+v", a)
+	}
+	if a.TodayRequests != 2 || a.TodayTotalTokens != 430 {
+		t.Fatalf("A today wrong: %+v", a)
+	}
+	if a.Upstream != "cline/opencode" {
+		t.Fatalf("A upstream expected cline/opencode, got %q", a.Upstream)
+	}
+	b := got[1]
+	if b.TodayRequests != 0 || b.TotalTokens != 10 {
+		t.Fatalf("B wrong: %+v", b)
+	}
+}
