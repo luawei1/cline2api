@@ -223,6 +223,44 @@ var apiMessages = map[string]map[locale]string{
 		localeZH: "压缩参数不能为负数",
 		localeEN: "compaction values cannot be negative",
 	},
+	// 模型组合（Named Model Combos）相关
+	"combo_saved": {
+		localeZH: "模型组合已保存",
+		localeEN: "Model combo saved",
+	},
+	"combo_deleted": {
+		localeZH: "模型组合已删除",
+		localeEN: "Model combo deleted",
+	},
+	"combo_cloned": {
+		localeZH: "模型组合已复制",
+		localeEN: "Model combo cloned",
+	},
+	"combo_not_found": {
+		localeZH: "模型组合不存在",
+		localeEN: "Model combo not found",
+	},
+	// 组合条目的上游固定（Source/Provider）校验
+	"combo_entry_bad_source": {
+		localeZH: "组合条目的上游固定值无效（可选：cline、zen、provider）",
+		localeEN: "invalid combo entry source (allowed: cline, zen, provider)",
+	},
+	"combo_entry_provider_required": {
+		localeZH: "固定到 provider 时必须填写 Provider 名称",
+		localeEN: "provider name is required when source=provider",
+	},
+	"combo_entry_provider_unknown": {
+		localeZH: "没有启用的 Provider %q 提供模型 %q",
+		localeEN: "no enabled provider %q serves model %q",
+	},
+	"combo_entry_zen_not_free": {
+		localeZH: "模型 %q 不是可用的免费 zen 模型，无法固定到 zen",
+		localeEN: "model %q is not an available free zen model; cannot pin source=zen",
+	},
+	"combo_entry_cline_unknown": {
+		localeZH: "模型 %q 不在 Cline 账号池中（非 zen 来源），无法固定到 cline",
+		localeEN: "model %q is not a Cline account-pool model (non-zen); cannot pin source=cline",
+	},
 }
 
 func requestLocale(r *http.Request) locale {

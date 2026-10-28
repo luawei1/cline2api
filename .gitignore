@@ -5,6 +5,7 @@
 .cline-zen.json
 .cline-config.json
 .cline-providers.json
+.cline-providers-cooldowns.json
 .cline-proxy.json
 
 # 运行时数据目录（docker compose 挂载）与原子写/损坏备份产物
@@ -51,3 +52,10 @@ frontend/wailsjs/
 # test files: run tests locally, never commit them (repo policy)
 *_test.go
 *.test
+
+# local planning docs: keep locally, never commit
+#PLAN-*.md
+#*.plan.md
+docs/
+.omc/
+.freebuff/

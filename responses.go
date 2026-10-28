@@ -498,6 +498,61 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 		chat["messages"] = sanitizeMessages(msgs)
 	}
 	chatModel, _ := chat["model"].(string)
+
+	// 模型组合：在普通路由之前分流（组合 ID 不是真实上游模型）。按配置顺序回退，
+	// 默认不触发全局 ModelChain / free 链；流式仅在连接级（尚未向客户端写字节）
+	// 可回退 —— 与 chat/responses 既有架构一致，不做预提交重开流。
+	if combo, ok := findCombo(chatModel); ok {
+		if !combo.Enabled {
+			msg := fmt.Sprintf("model combo %q is disabled", chatModel)
+			finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, msg)
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]string{"message": msg, "type": "invalid_request_error"},
+			})
+			return
+		}
+		reqLog.toolNames = clampParamsToolNames(chat)
+		run := runCombo(chat, combo, isStream, requestSessionID(chat, r.Header))
+		applyComboTrace(&reqLog, combo, run)
+		stampUpstream(&reqLog, chat)
+		if run.Acc != nil {
+			reqLog.AccountID = run.Acc.AccountID
+			reqLog.AccountEmail = run.Acc.Email
+		}
+		if run.Err != nil {
+			log.Printf("  responses combo %q error: %v", combo.ID, run.Err)
+			msg := comboTraceSummary(combo, run)
+			finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, msg)
+			writeJSON(w, clineErrorHTTPStatus(run.Err), map[string]any{
+				"error": map[string]string{"message": msg, "type": "api_error"},
+			})
+			return
+		}
+		defer run.Resp.Body.Close()
+		if isStream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.WriteHeader(http.StatusOK)
+			chatStreamToResponses(w, run.Resp, &reqLog, run.Acc)
+			return
+		}
+		var raw map[string]any
+		if err := json.NewDecoder(run.Resp.Body).Decode(&raw); err != nil {
+			finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, "decode response: "+err.Error())
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		out2 := normalizeOpenAIResponse(unwrapDataEnvelope(raw))
+		restoreToolCallsInResponse(out2, reqLog.toolNames)
+		usage := parseTokenUsage(out2["usage"])
+		recordTokenUsage(run.Acc, reqLog.Model, usage)
+		finalizeRequestLog(&reqLog, usage, time.Time{}, reqLog.StartedAt, true, "")
+		writeJSON(w, http.StatusOK, chatToResponses(out2))
+		return
+	}
+
 	route := routeModel(chatModel)
 
 	switch route {

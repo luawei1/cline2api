@@ -99,6 +99,11 @@ func registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/api/providers/delete", auth(handleProviderDelete))
 	mux.HandleFunc("/admin/api/providers/test", auth(handleProviderTest))
 	mux.HandleFunc("/admin/api/providers/presets", auth(handleProviderPresets))
+	mux.HandleFunc("/admin/api/combos", auth(handleCombosList))
+	mux.HandleFunc("/admin/api/combos/save", auth(handleComboSave))
+	mux.HandleFunc("/admin/api/combos/delete", auth(handleComboDelete))
+	mux.HandleFunc("/admin/api/combos/toggle", auth(handleComboToggle))
+	mux.HandleFunc("/admin/api/combos/clone", auth(handleComboClone))
 	mux.HandleFunc("/admin/api/password", auth(handleAdminPassword))
 	mux.HandleFunc("/admin/api/request-logs", auth(handleAdminRequestLogs))
 	mux.HandleFunc("/admin/api/open-external", auth(handleOpenExternal))
@@ -896,6 +901,8 @@ type proxyConfigData struct {
 	// 空 = 使用内置 free 链（glm-5.3-flash → deepseek-v4-flash → longcat-2.0）。
 	ModelChain []string `json:"modelChain,omitempty"`
 	OnlyFree   bool     `json:"onlyFree"` // 只显示免费模型：开启后 /models、/v1/models 仅返回免费模型
+	// Combos 具名模型组合（有序回退）。复用本配置文件与原子写，不引入新存储。
+	Combos []ModelCombo `json:"combos,omitempty"`
 }
 
 func defaultProxyConfig() *proxyConfigData {
@@ -927,7 +934,7 @@ func loadProxyConfigFromDisk() *proxyConfigData {
 		}
 	}
 	switch cfg.Strategy {
-	case "round_robin", "fill", "random":
+	case "round_robin", "fill", "random", "quality":
 	default:
 		cfg.Strategy = "round_robin"
 	}
@@ -1064,7 +1071,7 @@ func handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	if req.Strategy != "" {
 		switch req.Strategy {
-		case "round_robin", "fill", "random":
+		case "round_robin", "fill", "random", "quality":
 			cfg.Strategy = req.Strategy
 			changed = true
 		default:

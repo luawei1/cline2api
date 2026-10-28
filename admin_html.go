@@ -8,9 +8,11 @@ const adminHTML = `<!DOCTYPE html>
 <title>Cline 代理管理面板</title>
 <style>
 :root{
+  color-scheme:light;
   --bg:#f5f5f7;--surface:#ffffff;--surface2:#fbfbfd;
   --border:#d2d2d7;--border2:#e8e8ed;
-  --text:#1d1d1f;--text2:#86868b;--text3:#aeaeb2;
+  /* 辅助文字提高一档对比度，保证小字号可读（原 text3 #aeaeb2 对比度不足） */
+  --text:#1d1d1f;--text2:#6e6e73;--text3:#86868b;
   --accent:#007aff;--accent-hover:#0066d6;--accent-soft:#e8f0ff;
   --green:#34c759;--green-soft:#e8f9ed;
   --red:#ff3b30;--red-soft:#ffefee;
@@ -21,6 +23,13 @@ const adminHTML = `<!DOCTYPE html>
   --radius:16px;--radius-sm:10px;--radius-xs:8px;
   --ease:cubic-bezier(0.4,0,0.2,1);
   --blue:#007aff;
+  /* ===== 设计令牌：间距 / 字号 / 控件尺寸 / 焦点环 ===== */
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;--sp-7:32px;--sp-8:40px;
+  --fs-2xs:10px;--fs-xs:11px;--fs-sm:12px;--fs-base:13px;--fs-md:14px;--fs-lg:15px;--fs-xl:20px;--fs-2xl:28px;--fs-3xl:32px;
+  --control-h:38px;--control-h-sm:30px;
+  --ring:0 0 0 3px var(--accent-soft);
+  --radius-lg:16px;--radius-pill:999px;
+  --overlay-bg:rgba(15,23,42,0.45);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -83,12 +92,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text'
 .card.red .card-icon{background:var(--red-soft)}.card.red .card-icon svg{color:var(--red)}.card.red .num{color:var(--red)}
 
 /* ===== Section / Grouped ===== */
-.section{background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius);margin-bottom:20px;overflow:hidden;box-shadow:var(--shadow-sm)}
-.section-title{padding:16px 20px 8px;font-weight:600;font-size:15px;display:flex;align-items:center;gap:8px}
-.section-title svg{width:18px;height:18px;color:var(--text2)}
-.section-desc{padding:0 20px 12px;font-size:13px;color:var(--text2)}
-.section-body{padding:16px 20px}
-.section-body.flush{padding:0}
+.section{background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius);margin-bottom:var(--sp-5);overflow:hidden;box-shadow:var(--shadow-sm)}
+.section-title{padding:var(--sp-4) var(--sp-5) var(--sp-2);font-weight:600;font-size:var(--fs-lg);line-height:1.35;display:flex;align-items:center;gap:var(--sp-2);color:var(--text)}
+.section-title svg{width:18px;height:18px;color:var(--text2);flex-shrink:0}
+.section-desc{padding:0 var(--sp-5) var(--sp-3);font-size:var(--fs-base);line-height:1.6;color:var(--text2)}
+.section-body{padding:var(--sp-4) var(--sp-5)}
+.section-body.flush{padding:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.section-body.xscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 
 /* ===== Tabs (segmented) ===== */
 .tabs{display:flex;border-bottom:1px solid var(--border2);padding:0 20px;gap:4px}
@@ -103,9 +113,10 @@ table{width:100%;border-collapse:collapse;table-layout:fixed}
 .model-subtable{table-layout:auto}
 .model-subtable td{padding:7px 12px;text-align:left;white-space:nowrap}
 .model-subtable td:nth-child(n+3){text-align:right;font-variant-numeric:tabular-nums}
-th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2);font-size:13px;vertical-align:middle}
-.section-body.flush{overflow-x:auto}
-th{color:var(--text2);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;white-space:nowrap}
+th,td{text-align:left;padding:10px var(--sp-3);border-bottom:1px solid var(--border2);font-size:var(--fs-base);vertical-align:middle;overflow-wrap:break-word}
+.section-body.flush{overflow-x:auto;-webkit-overflow-scrolling:touch}
+th{color:var(--text2);font-weight:600;font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:0.4px;white-space:nowrap;background:var(--surface)}
+td.mono{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 tbody tr:last-child td{border-bottom:none}
 tbody tr{transition:background 0.15s var(--ease)}
 tbody tr:hover{background:var(--surface2)}
@@ -132,6 +143,24 @@ tbody tr:hover{background:var(--surface2)}
 .log-status{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600}
 .log-status.ok{background:var(--green-soft);color:var(--green)}
 .log-status.fail{background:var(--red-soft);color:var(--red)}
+.log-table tbody tr.log-row.has-attempts{cursor:pointer}
+.log-table tbody tr.log-row.has-attempts:hover{background:var(--surface2)}
+.log-model-cell{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.log-combo-badge{display:inline-block;padding:1px 7px;border-radius:6px;font-size:10px;font-weight:500;background:var(--accent-soft);color:var(--accent);white-space:nowrap;border:1px solid transparent}
+.log-fallback-badge{display:inline-block;padding:1px 7px;border-radius:6px;font-size:10px;font-weight:500;background:var(--yellow-soft);color:var(--yellow);white-space:nowrap;border:1px solid transparent}
+.log-req-model{font-size:10px;color:var(--text3)}
+.log-detail-cell{background:var(--surface2);padding:10px 14px !important;text-align:left !important;font-variant-numeric:normal}
+.log-attempts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.log-attempts li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;text-align:left}
+.log-attempts .attempt-model{font-family:ui-monospace,monospace;color:var(--text)}
+.log-attempts .attempt-meta{color:var(--text3)}
+.attempt-outcome{display:inline-block;padding:1px 7px;border-radius:6px;font-size:10px;font-weight:600}
+.attempt-outcome.success{background:var(--green-soft);color:var(--green)}
+.attempt-outcome.failed{background:var(--red-soft);color:var(--red)}
+.attempt-outcome.skipped{background:var(--yellow-soft);color:var(--yellow)}
+.attempt-reason{flex-basis:100%;font-size:11px;color:var(--text2);word-break:break-word}
+.log-card-attempts{margin-top:8px;border-top:1px solid var(--border2);padding-top:8px}
+.log-card-attempts summary{cursor:pointer;font-size:12px;color:var(--accent);font-weight:500}
 
 /* ===== Status badges ===== */
 .status{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600}
@@ -147,34 +176,37 @@ tbody tr:hover{background:var(--surface2)}
 .status-cooldown .cd-time{font-size:10px;font-weight:500;opacity:0.8}
 
 /* ===== Buttons ===== */
-.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;font-size:14px;font-weight:500;transition:all 0.18s var(--ease);text-decoration:none;line-height:1.2;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:var(--sp-2) var(--sp-4);min-height:var(--control-h);border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;font-size:var(--fs-md);font-weight:500;transition:background 0.18s var(--ease),border-color 0.18s var(--ease),transform 0.18s var(--ease),box-shadow 0.18s var(--ease);text-decoration:none;line-height:1.2;white-space:nowrap}
 .btn:hover{background:var(--surface2);border-color:var(--text3)}
 .btn:active{transform:scale(0.97)}
-.btn svg{width:16px;height:16px}
+.btn svg{width:16px;height:16px;flex-shrink:0}
+.btn:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
+.btn:disabled{opacity:0.5;cursor:not-allowed;transform:none}
 .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
 .btn-success{background:var(--green);border-color:var(--green);color:#fff}
 .btn-success:hover{background:#2bb24c;border-color:#2bb24c}
 .btn-danger{border-color:var(--red);color:var(--red);background:var(--surface)}
 .btn-danger:hover{background:var(--red);color:#fff}
-.btn-sm{padding:5px 12px;font-size:13px}
-.btn-icon{padding:6px;width:32px;height:32px;justify-content:center}
+.btn-sm{padding:5px var(--sp-3);min-height:var(--control-h-sm);font-size:var(--fs-base)}
+.btn-icon{padding:6px;width:32px;height:32px;min-height:0;justify-content:center}
 
 /* ===== Inputs ===== */
-input,textarea,select{width:100%;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;font-family:inherit;transition:border-color 0.18s var(--ease),box-shadow 0.18s var(--ease)}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-input:disabled{background:var(--surface2);color:var(--text2)}
-textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cascadia Code','Consolas',monospace;font-size:12px;line-height:1.6}
+input,textarea,select{width:100%;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--fs-md);font-family:inherit;transition:border-color 0.18s var(--ease),box-shadow 0.18s var(--ease)}
+input:not([type="checkbox"]):not([type="radio"]),select{min-height:var(--control-h)}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+input:disabled,select:disabled,textarea:disabled{background:var(--surface2);color:var(--text2);cursor:not-allowed}
+textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cascadia Code','Consolas',monospace;font-size:var(--fs-sm);line-height:1.6}
 ::placeholder{color:var(--text3)}
 
 /* ===== Forms ===== */
-.form-row{display:flex;gap:14px;align-items:flex-end;margin-bottom:14px}
-.form-row .field{flex:1}
-.form-row .field label{display:block;font-size:13px;color:var(--text2);margin-bottom:6px;font-weight:500}
-.form-actions{display:flex;gap:8px;margin-top:14px}
+.form-row{display:flex;gap:var(--sp-3);align-items:flex-end;margin-bottom:var(--sp-3)}
+.form-row .field{flex:1;min-width:0}
+.form-row .field label{display:block;font-size:var(--fs-base);color:var(--text2);margin-bottom:6px;font-weight:500}
+.form-actions{display:flex;gap:var(--sp-2);margin-top:var(--sp-3);flex-wrap:wrap;align-items:center}
 
 /* ===== Toast ===== */
-.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%) translateY(-20px);padding:12px 20px;border-radius:var(--radius-sm);color:#fff;z-index:9999;opacity:0;transition:all 0.3s var(--ease);font-size:14px;font-weight:500;max-width:420px;box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px}
+.toast{position:fixed;top:var(--sp-6);left:50%;transform:translateX(-50%) translateY(-20px);padding:var(--sp-3) var(--sp-5);border-radius:var(--radius-sm);color:#fff;z-index:9999;opacity:0;transition:opacity 0.3s var(--ease),transform 0.3s var(--ease);font-size:var(--fs-md);font-weight:500;max-width:min(420px,calc(100vw - 32px));box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:var(--sp-2)}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.success{background:var(--green)}
 .toast.error{background:var(--red)}
@@ -242,6 +274,11 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
 .model-list .model-group + .model-group{border-top:1px solid var(--border2)}
 .model-list .model-group-head{padding:9px 14px;margin:0}
 .model-list .model-group-body{margin:0}
+/* ===== 模型管理：两级分组（来源 → 厂商） ===== */
+.model-group-src-head{font-weight:700;color:var(--text)}
+.model-group-src > .model-group-body{border-left:2px solid var(--border2);padding-left:12px}
+.model-list .model-group-body .model-group-body{margin:2px 0 4px 14px}
+.model-group-vendor .model-group-head{font-weight:600}
 .model-row{display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--border2);background:var(--surface);transition:background 0.15s var(--ease)}
 .model-row:last-child{border-bottom:none}
 .model-row:hover{background:var(--surface2)}
@@ -255,7 +292,29 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
 .model-source-badge{display:inline-block;padding:1px 7px;border-radius:6px;font-size:10px;font-weight:500;background:var(--surface2);color:var(--text2);border:1px solid var(--border2);white-space:nowrap}
 .model-source-badge.zen{background:var(--accent-soft);color:var(--accent);border-color:transparent}
 .model-source-badge.custom{background:var(--green-soft);color:var(--green);border-color:transparent}
+.model-source-badge.provider{background:var(--yellow-soft);color:var(--yellow);border-color:transparent}
 .model-source-badge.remote{background:var(--surface2);color:var(--text2)}
+
+/* ===== 模型组合（Combo） ===== */
+.combo-check{display:inline-flex;align-items:center;gap:8px;font-size:14px;color:var(--text);cursor:pointer;padding:10px 0}
+.combo-preview-box{margin-top:14px;border:1px solid var(--border2);border-radius:10px;padding:12px;background:var(--surface2)}
+.combo-preview-title{font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px}
+.combo-preview{font-size:13px;color:var(--text);line-height:1.9;word-break:break-word}
+.combo-preview .step{display:inline-block;padding:2px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--border2);font-family:ui-monospace,monospace;font-size:12px}
+.combo-preview .arrow{color:var(--text3);margin:0 6px}
+.combo-entry{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border2);border-radius:8px;background:var(--surface);margin-bottom:8px;flex-wrap:wrap}
+.combo-entry.disabled-entry{opacity:0.6}
+.combo-entry-idx{flex-shrink:0;width:22px;height:22px;border-radius:50%;background:var(--surface2);border:1px solid var(--border2);display:inline-flex;align-items:center;justify-content:center;font-size:11px;color:var(--text2);font-variant-numeric:tabular-nums}
+.combo-entry-select{flex:1;min-width:200px}
+.combo-entry-select select{padding:7px 10px;font-size:13px;font-family:ui-monospace,monospace}
+.combo-entry-source{flex-shrink:0;display:inline-flex;align-items:center}
+.combo-entry-source select{width:auto;min-width:104px;padding:7px 10px;font-size:12px}
+.combo-entry-badges{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.combo-entry-actions{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0}
+.combo-entry-actions .btn{padding:3px 9px;font-size:12px}
+.combo-empty-entries{font-size:13px;color:var(--text3);padding:8px 2px}
+.combos-list{border:1px solid var(--border2);border-radius:var(--radius-sm);overflow:hidden}
+.combos-list .row-count{font-size:12px;color:var(--text2);white-space:nowrap}
 
 /* ===== Toggle 开关 ===== */
 .switch{position:relative;display:inline-block;width:34px;height:20px;flex-shrink:0}
@@ -265,6 +324,30 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
 .switch input:checked + .slider{background:var(--green)}
 .switch input:checked + .slider:before{transform:translateX(14px)}
 .switch input:disabled + .slider{opacity:0.5;cursor:wait}
+
+/* ===== 交互 / 无障碍 / 一致性完善 ===== */
+/* 键盘焦点环（表单控件已在 :focus 处理，避免双重描边） */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none}
+.switch input:focus-visible + .slider{box-shadow:var(--ring)}
+/* 工具栏控件统一高度，避免按钮 / 下拉 / 输入高低不齐 */
+.model-toolbar{align-items:center}
+.model-toolbar input:not([type="checkbox"]),.model-toolbar select,.model-toolbar .btn,.model-toolbar .sync-btn{min-height:var(--control-h)}
+.model-toolbar .field{min-width:0}
+/* 长文本稳健性：避免超长 URL / 模型 ID 撑破布局 */
+.section-desc,.combo-preview,.log-attempts li,.log-req-model{overflow-wrap:break-word}
+/* 弹层：统一遮罩模糊与阴影（登录 / 模型同步） */
+#loginOverlay,#modelSyncOverlay{backdrop-filter:saturate(150%) blur(6px);-webkit-backdrop-filter:saturate(150%) blur(6px)}
+#modelSyncModal{border-radius:var(--radius);box-shadow:var(--shadow-lg)}
+/* 空 / 加载状态统一留白与行高 */
+.empty{padding:var(--sp-8) var(--sp-5);color:var(--text2);line-height:1.6}
+.empty-state{padding:var(--sp-8) var(--sp-6)}
+/* 子标签 / 标签页横向滚动更顺滑 */
+.subtabs,.tabs{-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+/* 尊重「减少动效」偏好 */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition-duration:0.01ms !important;animation-duration:0.01ms !important;animation-iteration-count:1 !important}
+}
 
 @media (max-width:760px){
   .model-row{flex-wrap:wrap;gap:8px;padding:10px 12px}
@@ -340,6 +423,25 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
 	  .nav-item .nav-label{font-size:12px}
 	  .action-row .btn{flex:1;justify-content:center}
 	}
+/* ===== 追加响应式：平板 / 工具栏换行 / 表格滚动 ===== */
+@media (max-width:1000px){
+  .model-toolbar .sync-btn{flex:1 1 auto;justify-content:center}
+}
+@media (max-width:900px){
+  .page-header{flex-wrap:wrap}
+  .model-toolbar input[type="text"]{flex-basis:100%}
+  .model-toolbar select{flex:1 1 calc(50% - 8px)}
+  .model-toolbar .btn,.model-toolbar .sync-btn{flex:1 1 auto;justify-content:center}
+  .main{padding:28px 24px 48px}
+}
+@media (max-width:760px){
+  .section-title{flex-wrap:wrap;gap:var(--sp-2)}
+  .section-title > span{margin-left:0 !important}
+  .combo-entry-select{flex:1 1 100%;min-width:0}
+  .combo-entry-actions{margin-left:0}
+  .log-cards{padding:var(--sp-3);gap:var(--sp-2)}
+  .section-body.xscroll{padding:var(--sp-4)}
+}
 </style>
 </head>
 <body>
@@ -714,6 +816,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
   <div class="subtabs page-subtabs" data-page="routing">
     <div class="subtab active" data-sub="config">路由配置</div>
     <div class="subtab" data-sub="models">模型管理</div>
+    <div class="subtab" data-sub="combos">模型组合</div>
   </div>
 
   <div class="page-subpage" data-subpage="config">
@@ -730,6 +833,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
             <option value="round_robin">轮询 (round_robin)</option>
             <option value="fill">填满 (fill)</option>
             <option value="random">随机 (random)</option>
+            <option value="quality">质量优先 (quality)</option>
           </select>
         </div>
         <div class="field"><label>引擎版本</label><input type="text" id="settingVersion" disabled></div>
@@ -768,7 +872,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
       <div id="modelStatsBar" class="model-stats-bar"></div>
       <div class="model-toolbar">
         <input type="text" id="modelSearch" placeholder="搜索模型 ID..." oninput="onModelFilterChange('search', this.value)">
-        <select id="modelFilterProvider" onchange="onModelFilterChange('provider', this.value)"><option value="">全部提供商</option></select>
+        <select id="modelFilterProvider" onchange="onModelFilterChange('provider', this.value)"><option value="">全部来源</option></select>
         <select id="modelFilterCost" onchange="onModelFilterChange('cost', this.value)">
           <option value="">全部计费</option>
           <option value="free">免费</option>
@@ -780,6 +884,8 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
           <option value="disabled">已停用</option>
         </select>
         <button class="btn btn-sm" onclick="toggleAddModelRow()">＋ 添加模型</button>
+        <button class="btn btn-sm" id="bulkEnableFreeBtn" onclick="bulkModelToggle('free')">启用全部免费</button>
+        <button class="btn btn-sm" id="bulkDisablePaidBtn" onclick="bulkModelToggle('paid')">停用全部付费</button>
         <button class="sync-btn" id="syncModelsBtn" onclick="syncModels()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>从 Cline 同步模型</span></button>
         <button class="sync-btn" id="syncOcModelsBtn" onclick="syncOcModels()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>从 opencode 同步模型</span></button>
       </div>
@@ -798,6 +904,60 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
         <button class="btn btn-success" onclick="addModel()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加</button>
       </div>
       <div id="modelsList" class="model-list">加载中...</div>
+    </div>
+  </div>
+  </div>
+
+  <div class="page-subpage" data-subpage="combos" style="display:none">
+  <div class="section">
+    <div class="section-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span>模型组合</span>
+      <span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:400;color:var(--text3)">
+        <button class="btn btn-sm btn-primary" onclick="showComboEditor()">＋ 新建组合</button>
+      </span>
+    </div>
+    <div class="section-desc">把多个模型按优先级编排成组合（Combo）：命中组合时按顺序依次尝试，一个模型失败（限流/不可用）就自动切到下一个。停用的条目会被直接跳过。</div>
+    <div class="section-body">
+      <div id="combosList">加载中...</div>
+
+      <div id="comboEditor" style="display:none;margin-top:14px;border:1px solid var(--border2);border-radius:10px;padding:14px">
+        <div class="form-row">
+          <div class="field"><label>组合 ID *</label><input type="text" id="comboId" placeholder="premium-coding" style="font-family:ui-monospace,monospace"></div>
+          <div class="field"><label>名称 *</label><input type="text" id="comboName" placeholder="Premium Coding"></div>
+        </div>
+        <div class="form-row">
+          <div class="field" style="flex:2"><label>描述</label><input type="text" id="comboDesc" placeholder="可选"></div>
+          <div class="field"><label>分类</label><input type="text" id="comboCategory" placeholder="coding（可选）"></div>
+        </div>
+        <div class="form-row">
+          <div class="field">
+            <label>启用</label>
+            <select id="comboEnabled"><option value="true">启用</option><option value="false">停用</option></select>
+          </div>
+          <div class="field" style="justify-content:flex-end">
+            <label>紧急回退</label>
+            <label class="combo-check"><input type="checkbox" id="comboEmergency" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer"> <span>允许跳出组合回退</span></label>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin:-6px 0 12px">开启「紧急回退」后，仅当组合内所有条目都失败时，才允许继续回退到配置的全局回退链 / 内置免费链；关闭则组合内失败即结束。</div>
+
+        <div style="font-size:13px;color:var(--text2);font-weight:500;margin-bottom:8px">模型条目（按优先级从上到下）</div>
+        <div id="comboEntries"></div>
+        <div class="form-actions" style="margin-top:10px">
+          <button class="btn btn-sm" onclick="addComboEntry()">＋ 添加条目</button>
+        </div>
+
+        <div class="combo-preview-box">
+          <div class="combo-preview-title">优先级预览</div>
+          <div id="comboPreview" class="combo-preview">（暂无启用的条目）</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:6px">仅显示已启用的条目，停用的条目会被跳过。</div>
+        </div>
+
+        <div class="form-actions" style="margin-top:14px">
+          <button class="btn btn-sm btn-success" onclick="saveCombo()">保存组合</button>
+          <button class="btn btn-sm" onclick="hideComboEditor()">取消</button>
+          <span id="comboSaveResult" style="font-size:12px;margin-left:8px"></span>
+        </div>
+      </div>
     </div>
   </div>
   </div>
@@ -923,7 +1083,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
   <div class="section">
     <div class="section-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>Cline 请求头</div>
     <div class="section-desc">这些请求头会附加到所有转发给 Cline API 的请求中，以模拟官方客户端行为。</div>
-    <div class="section-body">
+    <div class="section-body xscroll">
       <table>
         <thead><tr><th style="width:240px">请求头</th><th>值</th><th style="width:48px"></th></tr></thead>
         <tbody id="headersTableBody">
@@ -960,7 +1120,7 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
   <div class="section">
     <div class="section-title">自定义 Provider（OpenAI 兼容）</div>
     <div class="section-desc">接入任意 OpenAI 兼容上游（OpenRouter / Groq / Cerebras / Gemini / Mistral / Together / 自建 vLLM 等）。模型命中自定义 Provider 时优先走该上游，失败自动按回退链降级，最终兜底 Cline 池。</div>
-    <div class="section-body">
+    <div class="section-body xscroll">
       <div id="providersList"></div>
       <div class="form-actions" style="margin-top:10px">
         <button class="btn btn-sm btn-primary" onclick="showProviderEditor()">＋ 添加 Provider</button>
@@ -976,6 +1136,11 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
           <div class="field"><label>优先级（小=优先）</label><input type="number" id="provPriority" value="10" min="0" max="1000"></div>
           <div class="field"><label>超时(秒)</label><input type="number" id="provTimeout" value="300" min="5" max="600"></div>
         </div>
+        <div class="form-row">
+          <div class="field"><label>分钟请求上限（0=不限）</label><input type="number" id="provRpmLimit" value="0" min="0" max="100000"></div>
+          <div class="field"><label>每日请求上限（0=不限）</label><input type="number" id="provDailyLimit" value="0" min="0" max="1000000"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:8px">配额提示：填入免费层限额后，路由会在派发前自动避开打满额度的上游，改用组内其他 provider，不再拿 429 试错</div>
         <div class="form-row">
           <div class="field" style="flex:1"><label>模型 ID（逗号分隔，如 z-ai/glm-5.3-flash, deepseek/deepseek-v4-flash）</label><input type="text" id="provModels" style="font-family:ui-monospace,monospace"></div>
         </div>
@@ -1216,6 +1381,7 @@ const I18N = {
   '轮询 (round_robin)': 'Round robin',
   '填满 (fill)': 'Fill',
   '随机 (random)': 'Random',
+  '质量优先 (quality)': 'Quality-first (quality)',
   '引擎版本': 'Engine Version',
   '账号文件': 'Account File',
   '请求头配置（模拟 Cline CLI 发出）': 'Request Headers (mimic Cline CLI)',
@@ -1455,6 +1621,9 @@ const I18N = {
   '本地服务器可留空）': 'leave empty on local server)',
   '超时(秒)': 'Timeout (s)',
   '优先级（小=优先）': 'Priority (lower = first)',
+  '分钟请求上限（0=不限）': 'RPM limit (0 = unlimited)',
+  '每日请求上限（0=不限）': 'Daily request limit (0 = unlimited)',
+  '配额提示：填入免费层限额后，路由会在派发前自动避开打满额度的上游，改用组内其他 provider，不再拿 429 试错': 'Quota hint: set the free-tier cap and routing avoids exhausted upstreams before dispatch, failing over to other providers in the group instead of discovering 429s by trial',
   '免费来源（供统计）': 'Free source (for stats)',
   '模型 ID（逗号分隔，如 z-ai/glm-5.3-flash, deepseek/deepseek-v4-flash）': 'Model IDs (comma-separated, e.g. z-ai/glm-5.3-flash, deepseek/deepseek-v4-flash)',
   '自定义请求头（每行 Key: Value，如 HTTP-Referer: https://mysite.com）': 'Custom headers (one Key: Value per line, e.g. HTTP-Referer: https://mysite.com)',
@@ -1531,6 +1700,66 @@ const I18N = {
   '其他': 'Other',
   '个模型': ' models',
   '＋ 添加模型': '＋ Add Model',
+  // 模型组合（Combo）
+  '模型组合': 'Model Combos',
+  '＋ 新建组合': '＋ New Combo',
+  '把多个模型按优先级编排成组合（Combo）：命中组合时按顺序依次尝试，一个模型失败（限流/不可用）就自动切到下一个。停用的条目会被直接跳过。': 'Arrange several models into a priority-ordered combo. A matched combo is tried in order; when one model fails (rate-limited/unavailable) it automatically moves to the next. Disabled entries are skipped.',
+  '组合 ID': 'Combo ID',
+  '组合 ID *': 'Combo ID *',
+  '描述': 'Description',
+  '可选': 'optional',
+  '分类': 'Category',
+  'coding（可选）': 'coding (optional)',
+  '紧急回退': 'Emergency fallback',
+  '允许跳出组合回退': 'Allow fallback outside the combo',
+  '开启「紧急回退」后，仅当组合内所有条目都失败时，才允许继续回退到配置的全局回退链 / 内置免费链；关闭则组合内失败即结束。': 'When "Emergency fallback" is on, only after every entry in the combo fails is it allowed to fall through to the configured global fallback chain / built-in free chain. When off, a combo failure ends the request.',
+  '模型条目（按优先级从上到下）': 'Model entries (priority, top to bottom)',
+  '＋ 添加条目': '＋ Add entry',
+  '优先级预览': 'Priority preview',
+  '（暂无启用的条目）': '(no enabled entries)',
+  '仅显示已启用的条目，停用的条目会被跳过。': 'Only enabled entries are shown; disabled entries are skipped.',
+  '保存组合': 'Save Combo',
+  '组合已保存': 'Combo saved',
+  '暂无模型组合': 'No model combos yet',
+  '条目': 'Entries',
+  '编辑': 'Edit',
+  '克隆': 'Clone',
+  '已克隆': 'Cloned',
+  '克隆失败: ': 'Clone failed: ',
+  '确定删除该组合？': 'Delete this combo?',
+  '未选择模型': 'No model selected',
+  '目录中未找到': 'Not in catalog',
+  '模型已停用': 'Model disabled',
+  '尚未添加条目，点击下方「添加条目」开始。': 'No entries yet. Click "Add entry" below to start.',
+  '启用/停用该条目': 'Enable/disable this entry',
+  '上移': 'Move up',
+  '下移': 'Move down',
+  '移除': 'Remove',
+  '— 选择模型 —': '— Select model —',
+  '上游': 'Upstream',
+  '自动': 'Auto',
+  '已使用': 'in use',
+  '请填写组合 ID': 'Enter a combo ID',
+  '请填写名称': 'Enter a name',
+  '该 ID 为保留别名，请更换': 'This ID is a reserved alias; choose another',
+  '条目中存在重复模型: ': 'Duplicate model in entries: ',
+  // 请求日志：组合与尝试链路
+  '组合': 'Combo',
+  '回退': 'Fallback',
+  '成功': 'Success',
+  '跳过': 'Skipped',
+  '尝试链路': 'Attempt trace',
+  '点击查看尝试链路': 'Click to view the attempt trace',
+  '请求: ': 'Requested: ',
+  // 模型管理：两级分组 + 免费导向批量开关
+  '全部来源': 'All sources',
+  'Cline': 'Cline',
+  'Zen (opencode)': 'Zen (opencode)',
+  '启用全部免费': 'Enable all free',
+  '停用全部付费': 'Disable all paid',
+  '确定启用全部免费模型？': 'Enable all free models?',
+  '确定停用全部付费模型？': 'Disable all paid models?',
+  '没有符合条件的模型': 'No matching models',
 };
 let LANG = 'zh';
 const LC = () => LANG === 'en' ? 'en-US' : 'zh-CN';
@@ -1588,6 +1817,8 @@ const API = '/admin/api';
 
 const _ = id => document.getElementById(id);
 const esc = s => { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; };
+// 属性上下文转义：esc 不处理引号，注入到 onclick / value 等属性时需额外转义引号
+const escAttr = s => esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 const ACTIVE_TAB_KEY = 'cline_admin_tab';
 
@@ -1640,7 +1871,7 @@ function applyTab(name){
   if (name === 'dashboard') { applyLang(); loadStats(); loadAccounts(); }
   else if (name === 'accounts') loadAccounts();
   else if (name === 'logs') loadRequestLogs(true);
-  else if (name === 'routing') { loadModels().then(() => loadConfig()); }
+  else if (name === 'routing') { loadModels().then(() => { loadConfig(); if (routingActiveSub() === 'combos') loadCombos(); }); }
   else if (name === 'upstreams') { loadOcConfig(); loadClineProxyConfig(); loadZenHeaders(); loadProviders(); }
   else if (name === 'security') { loadKeys(); loadConfig(); }
 }
@@ -1720,6 +1951,19 @@ function switchPageSubTab(page, sub, skipSave) {
     });
   }
   if (!skipSave) { try { localStorage.setItem(SUBTAB_KEY_PREFIX + page, sub); } catch(e) {} }
+  if (!skipSave) onPageSubTabShown(page, sub);
+}
+
+// 子页显示时的按需加载钩子（用户点击切换时触发；首次进入由 applyTab 处理）
+function onPageSubTabShown(page, sub) {
+  if (page === 'routing' && sub === 'combos') loadCombos();
+}
+
+// 读取 routing 页当前激活的子页名（用于顶层标签切换后按需加载）
+function routingActiveSub() {
+  const nav = document.querySelector('.page-subtabs[data-page="routing"]');
+  const el = nav && nav.querySelector('.subtab.active');
+  return el ? el.dataset.sub : '';
 }
 document.querySelectorAll('.page-subtabs').forEach(nav => {
   nav.querySelectorAll('.subtab').forEach(el => {
@@ -2566,7 +2810,7 @@ async function loadProviders() {
     const list = d.data.providers || [];
     const box = _('providersList');
     if (!list.length) { box.innerHTML = '<div class="empty" style="padding:10px;color:var(--text3)">' + t('暂无自定义 Provider') + '</div>'; return; }
-    box.innerHTML = '<table><thead><tr><th>名称</th><th>Base URL</th><th>模型</th><th>优先级</th><th>状态</th><th style="width:150px"></th></tr></thead><tbody>' +
+    box.innerHTML = '<table><thead><tr><th>名称</th><th>Base URL</th><th>模型</th><th>优先级</th><th>状态</th><th style="width:220px"></th></tr></thead><tbody>' +
       list.map(p =>
         '<tr>' +
           '<td>' + esc(p.name) + (p.free ? ' <span style="color:var(--green);font-size:11px">free</span>' : '') + '</td>' +
@@ -2576,10 +2820,26 @@ async function loadProviders() {
           '<td>' + (p.enabled ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--text3)">停用</span>') + '</td>' +
           '<td><button class="btn btn-sm" onclick="editProvider(\'' + p.id + '\')">编辑</button> ' +
               '<button class="btn btn-sm" onclick=\'testProviderById("' + p.id + '")\'>测试</button> ' +
+              '<button class="btn btn-sm" onclick=\'toggleProvider("' + p.id + '", ' + !p.enabled + ')\'>' + (p.enabled ? t('停用') : t('启用')) + '</button> ' +
               '<button class="btn btn-sm btn-danger" onclick=\'deleteProvider("' + p.id + '")\'>✕</button></td>' +
         '</tr>'
       ).join('') + '</tbody></table>';
   } catch (e) { /* ignore */ }
+}
+
+// toggleProvider 快速切换 provider 启停（不打开编辑表单）：拉取最新配置，
+// 翻转 enabled 后原样回存，其余字段不动。停用即时退出路由与模型同步。
+async function toggleProvider(id, enable) {
+  try {
+    const d = await api('GET', '/providers');
+    const p = (d.data.providers || []).find(x => x.id === id);
+    if (!p) { toast(t('Provider 未找到'), 'error'); return; }
+    p.enabled = !!enable;
+    p.modelIds = p.modelIds || [];
+    await api('POST', '/providers/save', p);
+    toast(t(enable ? '已启用' : '已停用') + ': ' + p.name, 'success');
+    loadProviders();
+  } catch (e) { toast(t('保存失败: ') + e.message, 'error'); }
 }
 
 function showProviderEditor(p) {
@@ -2589,6 +2849,8 @@ function showProviderEditor(p) {
   _('provKey').value = p ? (p.apiKey || '') : '';
   _('provPriority').value = p ? p.priority : 10;
   _('provTimeout').value = p ? (p.timeoutSec || 300) : 300;
+  _('provRpmLimit').value = p ? (p.rpmLimit || 0) : 0;
+  _('provDailyLimit').value = p ? (p.dailyRequestLimit || 0) : 0;
   _('provModels').value = p ? (p.modelIds || []).join(', ') : '';
   _('provHeaders').value = p ? Object.entries(p.headers || {}).map(([k, v]) => k + ': ' + v).join('\n') : '';
   _('provEnabled').value = p ? String(p.enabled !== false) : 'true';
@@ -2606,6 +2868,8 @@ async function saveProvider() {
     apiKey: _('provKey').value.trim(),
     priority: parseInt(_('provPriority').value, 10) || 10,
     timeoutSec: parseInt(_('provTimeout').value, 10) || 300,
+    rpmLimit: parseInt(_('provRpmLimit').value, 10) || 0,
+    dailyRequestLimit: parseInt(_('provDailyLimit').value, 10) || 0,
     modelIds: _('provModels').value.split(',').map(s => s.trim()).filter(Boolean),
     headers: parseHeaderText(_('provHeaders').value),
     enabled: _('provEnabled').value === 'true',
@@ -2714,6 +2978,392 @@ async function saveHeaders() {
   } catch (e) { toast(t('保存失败: ') + e.message, 'error'); }
 }
 
+// ========== 模型组合（Combo） ==========
+var _comboList = [];
+var _comboCatalog = [];
+var _comboReserved = [];
+var _comboEntries = [];
+var _editingComboId = '';
+
+// 组合模型来源显示名：provider → 真实 Provider 名；remote → Cline；zen/seed → opencode；其余 → 自定义
+function comboSourceName(m) {
+  if (m.source === 'provider') return m.provider || t('自定义');
+  if (m.source === 'remote') return 'Cline';
+  if (m.source === 'zen' || m.source === 'seed') return 'opencode';
+  return t('自定义');
+}
+
+// loadCombos 拉取组合列表 + 模型目录 + 保留别名；可安全地重复调用
+async function loadCombos() {
+  try {
+    const d = await api('GET', '/combos');
+    _comboList = d.data.combos || [];
+    _comboCatalog = d.data.modelCatalog || [];
+    _comboReserved = d.data.reservedAliases || [];
+    renderCombosList();
+    // 编辑面板打开时目录可能已更新，重绘条目下拉（不丢失当前编辑内容）
+    const ed = _('comboEditor');
+    if (ed && ed.style.display !== 'none') renderComboEntries();
+  } catch (e) {
+    const box = _('combosList');
+    if (box) box.innerHTML = '<div class="empty">' + t('加载失败') + ': ' + esc(e.message) + '</div>';
+  }
+}
+
+function comboCatalogEntry(id) {
+  return _comboCatalog.find(m => m.id === id) || null;
+}
+
+// 组合列表渲染：id / 名称 / 分类 / 条目数 / 状态 / 操作
+function renderCombosList() {
+  const box = _('combosList');
+  if (!box) return;
+  if (!_comboList.length) {
+    box.innerHTML = '<div class="empty">' + t('暂无模型组合') + '</div>';
+    return;
+  }
+  box.innerHTML = '<div class="combos-list"><table><thead><tr>' +
+    '<th>' + t('组合 ID') + '</th><th>' + t('名称') + '</th><th>' + t('分类') + '</th>' +
+    '<th>' + t('条目') + '</th><th>' + t('状态') + '</th><th style="width:280px"></th>' +
+    '</tr></thead><tbody>' +
+    _comboList.map(c => {
+      const entries = c.entries || [];
+      const enabledEntries = entries.filter(e => !e.disabled).length;
+      const badge = c.enabled
+        ? '<span class="log-status ok">' + t('已启用') + '</span>'
+        : '<span class="log-status fail">' + t('已停用') + '</span>';
+      const fb = c.emergencyFallback
+        ? ' <span class="model-source-badge provider" title="' + t('允许跳出组合回退') + '">' + t('紧急回退') + '</span>'
+        : '';
+      return '<tr>' +
+        '<td class="mono" style="font-size:12px">' + esc(c.id) + '</td>' +
+        '<td>' + esc(c.name || '') + fb + '</td>' +
+        '<td>' + (c.category ? esc(c.category) : '<span style="color:var(--text3)">-</span>') + '</td>' +
+        '<td class="row-count">' + enabledEntries + ' / ' + entries.length + '</td>' +
+        '<td>' + badge + '</td>' +
+        '<td><button class="btn btn-sm" onclick="editCombo(\'' + escAttr(c.id) + '\')">' + t('编辑') + '</button> ' +
+            '<button class="btn btn-sm" onclick="cloneCombo(\'' + escAttr(c.id) + '\')">' + t('克隆') + '</button> ' +
+            '<button class="btn btn-sm" onclick="toggleCombo(\'' + escAttr(c.id) + '\', ' + !c.enabled + ')">' + t(c.enabled ? '停用' : '启用') + '</button> ' +
+            '<button class="btn btn-sm btn-danger" onclick="deleteCombo(\'' + escAttr(c.id) + '\')">✕</button></td>' +
+      '</tr>';
+    }).join('') +
+    '</tbody></table></div>';
+}
+
+function showComboEditor(c) {
+  _editingComboId = c ? c.id : '';
+  _('comboId').value = c ? c.id : '';
+  _('comboId').disabled = !!c; // 编辑既有组合时 id 不可改（主键）
+  _('comboName').value = c ? (c.name || '') : '';
+  _('comboDesc').value = c ? (c.description || '') : '';
+  _('comboCategory').value = c ? (c.category || '') : '';
+  _('comboEnabled').value = c ? String(c.enabled !== false) : 'true';
+  _('comboEmergency').checked = c ? !!c.emergencyFallback : false;
+  _comboEntries = c ? (c.entries || []).map(e => ({ model: e.model || '', disabled: !!e.disabled, source: e.source || '', provider: e.provider || '' })) : [];
+  _('comboSaveResult').textContent = '';
+  renderComboEntries();
+  _('comboEditor').style.display = '';
+  try { _('comboEditor').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+}
+
+function hideComboEditor() {
+  _('comboEditor').style.display = 'none';
+  _editingComboId = '';
+  _comboEntries = [];
+}
+
+// 组合下拉/条目标签：id · <来源名> · 免费/付费（不重复显示 Provider 名）
+function comboModelLabel(m) {
+  return m.id + '  ·  ' + comboSourceName(m) + '  ·  ' + (m.cost === 'free' ? t('免费') : t('付费'));
+}
+
+// 组合下拉分组：按来源归组（Provider 用真实名）
+function comboOptgroupKey(m) {
+  if (m.source === 'provider') return 'prov:' + (m.provider || 'Provider');
+  if (m.source === 'remote') return 'remote';
+  if (m.source === 'zen' || m.source === 'seed') return 'zen';
+  return 'custom';
+}
+function comboGroupSortKey(a, b) {
+  const ord = k => k === 'remote' ? 0 : (k === 'zen' ? 1 : (k.indexOf('prov:') === 0 ? 2 : 3));
+  const oa = ord(a), ob = ord(b);
+  if (oa !== ob) return oa - ob;
+  return a.localeCompare(b);
+}
+
+// 构建模型下拉：按来源分 <optgroup>；排除管理页已停用的模型；当前条目即使停用/缺失也始终保留为选中项
+function buildComboModelOptions(current, chosenMap) {
+  let html = '<option value=""' + (!current ? ' selected' : '') + '>' + t('— 选择模型 —') + '</option>';
+  const cur = current ? comboCatalogEntry(current) : null;
+  // 保留当前引用：停用标记为「模型已停用」，不在目录中标记为「目录中未找到」，绝不静默丢弃
+  if (current && (!cur || cur.disabled)) {
+    const label = cur
+      ? esc(comboModelLabel(cur)) + '  ·  ' + t('模型已停用')
+      : esc(current) + '  ·  ' + t('目录中未找到');
+    html += '<option value="' + escAttr(current) + '" selected>' + label + '</option>';
+  }
+  const groups = new Map(); // groupKey -> { label, items[] }
+  const seen = {};
+  for (const m of _comboCatalog) {
+    if (m.disabled) continue;         // 已停用模型不可选
+    if (seen[m.id]) continue;
+    seen[m.id] = true;
+    const gk = comboOptgroupKey(m);
+    if (!groups.has(gk)) groups.set(gk, { label: comboSourceName(m), items: [] });
+    groups.get(gk).items.push(m);
+  }
+  const gkeys = Array.from(groups.keys()).sort(comboGroupSortKey);
+  for (const gk of gkeys) {
+    const g = groups.get(gk);
+    html += '<optgroup label="' + escAttr(g.label) + '">';
+    g.items.sort((a, b) => a.id.localeCompare(b.id));
+    for (const m of g.items) {
+      const used = chosenMap[m.id] && m.id !== current;
+      html += '<option value="' + escAttr(m.id) + '"' + (m.id === current ? ' selected' : '') + (used ? ' disabled' : '') + '>' +
+        esc(comboModelLabel(m)) + (used ? '  ·  ' + t('已使用') : '') + '</option>';
+    }
+    html += '</optgroup>';
+  }
+  return html;
+}
+
+// 选中模型的小徽章：来源 / 提供商 / 计费 / 停用 / 下架
+function comboEntryBadges(id) {
+  if (!id) return '<span style="font-size:11px;color:var(--text3)">' + t('未选择模型') + '</span>';
+  const m = comboCatalogEntry(id);
+  if (!m) return '<span class="delisted-badge" style="border-color:var(--yellow);color:var(--yellow)">' + t('目录中未找到') + '</span>';
+  let b = '';
+  let srcKey = 'custom';
+  if (m.source === 'provider') srcKey = 'provider';
+  else if (m.source === 'remote') srcKey = 'remote';
+  else if (m.source === 'zen' || m.source === 'seed') srcKey = 'zen';
+  b += '<span class="model-source-badge ' + srcKey + '">' + esc(comboSourceName(m)) + '</span>';
+  if (m.provider && m.source !== 'provider') b += '<span class="model-source-badge">' + esc(m.provider) + '</span>';
+  b += m.cost === 'free'
+    ? '<span class="model-tag free" style="padding:1px 7px;font-size:10px;margin:0">' + t('免费') + '</span>'
+    : '<span class="model-tag pass" style="padding:1px 7px;font-size:10px;margin:0">' + t('付费') + '</span>';
+  if (m.disabled) b += '<span class="delisted-badge" style="border-color:var(--yellow);color:var(--yellow)">' + t('模型已停用') + '</span>';
+  if (m.delisted) b += '<span class="delisted-badge">' + t('已下架') + '</span>';
+  return b;
+}
+
+// 目录行 → 上游 pin 元组（与后端 source 取值一致：cline / zen / provider）
+function comboCatalogPin(m) {
+  if (m.source === 'provider') return { source: 'provider', provider: m.provider || '' };
+  if (m.source === 'zen' || m.source === 'seed') return { source: 'zen', provider: '' };
+  return { source: 'cline', provider: '' }; // remote 或 ""
+}
+
+function comboPinKey(pin) {
+  return (pin && pin.source ? pin.source : '') + '|' + ((pin && pin.provider) ? pin.provider : '');
+}
+
+function comboPinLabel(pin) {
+  if (!pin || !pin.source) return '';
+  if (pin.source === 'zen') return 'opencode';
+  if (pin.source === 'cline') return 'Cline';
+  return pin.provider || t('自定义');
+}
+
+// 同一模型 ID 在目录中可用的去重上游列表（按 pin 元组去重；<2 个时不需选择器）
+function comboEntryUpstreams(modelId) {
+  if (!modelId) return [];
+  const map = new Map();
+  for (const m of _comboCatalog) {
+    if (m.id !== modelId) continue;
+    const pin = comboCatalogPin(m);
+    const k = comboPinKey(pin);
+    if (!map.has(k)) map.set(k, pin);
+  }
+  const pins = Array.from(map.values());
+  const ord = p => p.source === 'cline' ? 0 : (p.source === 'zen' ? 1 : 2);
+  pins.sort((a, b) => {
+    const oa = ord(a), ob = ord(b);
+    return oa !== ob ? oa - ob : comboPinLabel(a).localeCompare(comboPinLabel(b));
+  });
+  return pins;
+}
+
+// 仅当该模型有多个上游时渲染「上游」选择器；value: "" 自动 | cline | zen | provider|<Name>
+function comboSourceSelectHtml(i, e) {
+  const ups = comboEntryUpstreams(e.model);
+  if (ups.length < 2) return '';
+  const curKey = comboPinKey({ source: e.source, provider: e.provider });
+  let opts = '<option value=""' + (!e.source ? ' selected' : '') + '>' + t('自动') + '</option>';
+  for (const p of ups) {
+    const val = p.source === 'provider' ? ('provider|' + p.provider) : p.source;
+    opts += '<option value="' + escAttr(val) + '"' + (comboPinKey(p) === curKey ? ' selected' : '') + '>' + esc(comboPinLabel(p)) + '</option>';
+  }
+  return '<span class="combo-entry-source"><select title="' + t('上游') + '" onchange="onComboEntrySourceChange(' + i + ', this.value)">' + opts + '</select></span>';
+}
+
+// 条目编辑器渲染 + 优先级预览
+function renderComboEntries() {
+  const box = _('comboEntries');
+  if (!box) return;
+  if (!_comboEntries.length) {
+    box.innerHTML = '<div class="combo-empty-entries">' + t('尚未添加条目，点击下方「添加条目」开始。') + '</div>';
+    renderComboPreview();
+    return;
+  }
+  const chosen = {};
+  _comboEntries.forEach(e => { if (e.model) chosen[e.model] = true; });
+  box.innerHTML = _comboEntries.map((e, i) => {
+    const opts = buildComboModelOptions(e.model, chosen);
+    const dis = e.disabled ? ' disabled-entry' : '';
+    return '<div class="combo-entry' + dis + '">' +
+      '<span class="combo-entry-idx">' + (i + 1) + '</span>' +
+      '<span class="combo-entry-select"><select onchange="onComboEntryModelChange(' + i + ', this.value)">' + opts + '</select></span>' +
+      comboSourceSelectHtml(i, e) +
+      '<span class="combo-entry-badges">' + comboEntryBadges(e.model) + '</span>' +
+      '<span class="combo-entry-actions">' +
+        '<label class="switch" title="' + t('启用/停用该条目') + '"><input type="checkbox"' + (e.disabled ? '' : ' checked') + ' onchange="onComboEntryDisabled(' + i + ', !this.checked)"><span class="slider"></span></label>' +
+        '<button class="btn btn-sm" onclick="moveComboEntry(' + i + ', -1)"' + (i === 0 ? ' disabled' : '') + ' title="' + t('上移') + '">↑</button>' +
+        '<button class="btn btn-sm" onclick="moveComboEntry(' + i + ', 1)"' + (i === _comboEntries.length - 1 ? ' disabled' : '') + ' title="' + t('下移') + '">↓</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="removeComboEntry(' + i + ')" title="' + t('移除') + '">✕</button>' +
+      '</span>' +
+    '</div>';
+  }).join('');
+  renderComboPreview();
+}
+
+function renderComboPreview() {
+  const box = _('comboPreview');
+  if (!box) return;
+  const enabled = _comboEntries.filter(e => !e.disabled && e.model);
+  if (!enabled.length) {
+    box.innerHTML = '<span style="color:var(--text3)">' + t('（暂无启用的条目）') + '</span>';
+    return;
+  }
+  box.innerHTML = enabled.map((e, i) =>
+    '<span class="step">' + (i + 1) + '. ' + esc(e.model) + '</span>'
+  ).join('<span class="arrow">→</span>');
+}
+
+function addComboEntry() {
+  _comboEntries.push({ model: '', disabled: false, source: '', provider: '' });
+  renderComboEntries();
+}
+
+function removeComboEntry(i) {
+  if (i < 0 || i >= _comboEntries.length) return;
+  _comboEntries.splice(i, 1);
+  renderComboEntries();
+}
+
+function onComboEntryModelChange(i, val) {
+  const e = _comboEntries[i];
+  if (!e) return;
+  e.model = val;
+  // 新模型若不再提供当前 pin 的上游，则清空为「自动」，避免残留无效钉选
+  if (e.source) {
+    const key = comboPinKey({ source: e.source, provider: e.provider });
+    const stillValid = comboEntryUpstreams(val).some(p => comboPinKey(p) === key);
+    if (!stillValid) { e.source = ''; e.provider = ''; }
+  }
+  renderComboEntries();
+}
+
+// 上游选择变化："" 清空；cline/zen 设定来源；provider|<Name> 设定 Provider 来源
+function onComboEntrySourceChange(i, value) {
+  const e = _comboEntries[i];
+  if (!e) return;
+  if (value === 'cline' || value === 'zen') {
+    e.source = value; e.provider = '';
+  } else if (value && value.indexOf('provider|') === 0) {
+    e.source = 'provider'; e.provider = value.slice(9);
+  } else {
+    e.source = ''; e.provider = '';
+  }
+  renderComboPreview();
+}
+
+function onComboEntryDisabled(i, disabled) {
+  if (_comboEntries[i]) _comboEntries[i].disabled = !!disabled;
+  renderComboEntries();
+}
+
+function moveComboEntry(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= _comboEntries.length) return;
+  const tmp = _comboEntries[i];
+  _comboEntries[i] = _comboEntries[j];
+  _comboEntries[j] = tmp;
+  renderComboEntries();
+}
+
+async function saveCombo() {
+  const id = _('comboId').value.trim();
+  const name = _('comboName').value.trim();
+  const res = _('comboSaveResult');
+  res.textContent = '';
+  if (!id) { toast(t('请填写组合 ID'), 'error'); return; }
+  if (!name) { toast(t('请填写名称'), 'error'); return; }
+  if (!_editingComboId && _comboReserved.indexOf(id) !== -1) { toast(t('该 ID 为保留别名，请更换'), 'error'); return; }
+  const entries = _comboEntries.filter(e => e.model).map(e => {
+    const out = { model: e.model, disabled: !!e.disabled };
+    if (e.source) {
+      out.source = e.source;
+      if (e.source === 'provider' && e.provider) out.provider = e.provider;
+    }
+    return out;
+  });
+  const seen = {};
+  for (const e of entries) {
+    if (seen[e.model]) { toast(t('条目中存在重复模型: ') + e.model, 'error'); return; }
+    seen[e.model] = true;
+  }
+  const payload = {
+    id: id,
+    name: name,
+    description: _('comboDesc').value.trim(),
+    category: _('comboCategory').value.trim(),
+    enabled: _('comboEnabled').value === 'true',
+    emergencyFallback: _('comboEmergency').checked,
+    entries: entries,
+  };
+  try {
+    await api('POST', '/combos/save', payload);
+    toast(t('组合已保存'), 'success');
+    hideComboEditor();
+    await loadCombos();
+  } catch (e) {
+    res.innerHTML = '<span style="color:var(--red)">✗ ' + esc(e.message) + '</span>';
+    toast(t('保存失败: ') + e.message, 'error');
+  }
+}
+
+function editCombo(id) {
+  const c = _comboList.find(x => x.id === id);
+  if (c) showComboEditor(c);
+}
+
+async function toggleCombo(id, enabled) {
+  try {
+    await api('POST', '/combos/toggle', { id: id, enabled: !!enabled });
+    toast(t(enabled ? '已启用' : '已停用') + ': ' + id, 'success');
+    await loadCombos();
+  } catch (e) { toast(t('保存失败: ') + e.message, 'error'); }
+}
+
+async function deleteCombo(id) {
+  if (!confirm(t('确定删除该组合？'))) return;
+  try {
+    await api('POST', '/combos/delete', { id: id });
+    toast(t('已删除'), 'success');
+    if (_editingComboId === id) hideComboEditor();
+    await loadCombos();
+  } catch (e) { toast(t('删除失败: ') + e.message, 'error'); }
+}
+
+async function cloneCombo(id) {
+  try {
+    await api('POST', '/combos/clone', { id: id });
+    toast(t('已克隆'), 'success');
+    await loadCombos();
+  } catch (e) { toast(t('克隆失败: ') + e.message, 'error'); }
+}
+
 // ========== 模型列表 ==========
 let _cachedModels = [];
 let _modelSyncSeen = false;
@@ -2725,34 +3375,62 @@ try {
   if (_mgo && typeof _mgo === 'object') _modelGroupOpen = _mgo;
 } catch (e) {}
 
-// modelProviderKey 按提供商分组：自定义模型归 __custom；zen 模型 Provider 恒为
-// "opencode"，改用模型 ID 的 "/" 前缀（与后端 remoteProvider 推断一致，如
-// z-ai / deepseek / google）；无前缀时回退 provider 字段。
-function modelProviderKey(m) {
-  if (m.custom) return '__custom';
+// ===== 两级分组：一级 = 真实来源（Cline / Zen / Provider / 自定义），二级 = 厂商 =====
+// mergedSourceKey：合并行的主来源，优先级 自定义 > Provider > zen > Cline
+function mergedSourceKey(m) {
+  if (m._customAny) return 'custom';
+  if (m._sources.indexOf('provider') !== -1) return 'provider';
+  if (m._sources.indexOf('zen') !== -1) return 'zen';
+  return 'remote';
+}
+
+// 一级分组 key：src:cline / src:zen / src:prov:<name> / src:custom / src:other
+function sourceGroupKey(m) {
+  const src = mergedSourceKey(m);
+  if (src === 'provider') return 'src:prov:' + ((m._provNames && m._provNames[0]) || m.provider || 'Provider');
+  if (src === 'zen') return 'src:zen';
+  if (src === 'custom') return 'src:custom';
+  if (src === 'remote') return 'src:cline';
+  return 'src:other';
+}
+
+function sourceGroupLabel(key) {
+  if (key === 'src:cline') return t('Cline');
+  if (key === 'src:zen') return t('Zen (opencode)');
+  if (key.indexOf('src:prov:') === 0) return key.slice(9);
+  if (key === 'src:custom') return t('用户自定义');
+  return t('其他');
+}
+
+function sourceSortKey(a, b) {
+  const ord = k => k === 'src:cline' ? 0 : (k === 'src:zen' ? 1 : (k.indexOf('src:prov:') === 0 ? 2 : (k === 'src:custom' ? 3 : 4)));
+  const oa = ord(a), ob = ord(b);
+  if (oa !== ob) return oa - ob;
+  return a.localeCompare(b);
+}
+
+// 二级（厂商）key：模型 ID 第一个 "/" 前的前缀；无前缀回退 provider 字段
+function vendorKey(m) {
   const idx = (m.id || '').indexOf('/');
   if (idx > 0) return m.id.slice(0, idx);
   return m.provider || '__other';
 }
 
-function modelProviderLabel(key) {
-  if (key === '__custom') return t('用户自定义');
-  if (key === '__other') return t('其他');
-  return key;
-}
+function vendorLabel(key) { return key === '__other' ? t('其他') : key; }
 
-function providerSortKey(a, b) {
-  if (a === '__custom') return 1;
-  if (b === '__custom') return -1;
+function vendorSortKey(a, b) {
+  if (a === '__other') return 1;
+  if (b === '__other') return -1;
   return a.localeCompare(b);
 }
 
 function modelSource(m) {
   if (m.custom) return 'custom';
+  if (m.source === 'provider') return 'provider';
   if (m.source === 'zen' || m.provider === 'opencode') return 'zen';
   return 'remote';
 }
-const MODEL_SOURCE_LABEL = { zen: 'opencode', remote: 'Cline' };
+const MODEL_SOURCE_LABEL = { zen: 'opencode', remote: 'Cline', provider: 'Provider' };
 
 // mergeModelsById 同一模型 ID 可能同时被 Cline 与 opencode 同步（池内多条目）：
 // 合并为一行展示 —— 来源/计费取并集；delisted 区分「任一下架/全部下架」
@@ -2766,6 +3444,7 @@ function mergeModelsById(models) {
         id: m.id, provider: m.provider || '', context: m.context || 0, output: m.output || 0,
         _sources: [modelSource(m)],
         _costs: [m.cost || 'free'],
+        _provNames: (modelSource(m) === 'provider' && m.provider) ? [m.provider] : [],
         _delistedAny: !!m.delisted,
         _delistedAll: !!m.delisted,
         _customAny: !!m.custom,
@@ -2776,6 +3455,9 @@ function mergeModelsById(models) {
     const src = modelSource(m);
     if (prev._sources.indexOf(src) === -1) prev._sources.push(src);
     if (prev._costs.indexOf(m.cost || 'free') === -1) prev._costs.push(m.cost || 'free');
+    // 同一模型 ID 可被多个自定义 Provider 同步进来（同名不同源）：
+    // 全部来源名字都亮出来，肉眼即可分辨同一模型的两个上游
+    if (src === 'provider' && m.provider && prev._provNames.indexOf(m.provider) === -1) prev._provNames.push(m.provider);
     prev._delistedAny = prev._delistedAny || !!m.delisted;
     prev._delistedAll = prev._delistedAll && !!m.delisted;
     prev._customAny = prev._customAny || !!m.custom;
@@ -2794,20 +3476,21 @@ function onModelFilterChange(key, value) {
 
 function modelMatchesFilters(m) {
   if (_modelFilters.search && m.id.toLowerCase().indexOf(_modelFilters.search.toLowerCase()) === -1) return false;
-  if (_modelFilters.provider && modelProviderKey(m) !== _modelFilters.provider) return false;
+  if (_modelFilters.provider && sourceGroupKey(m) !== _modelFilters.provider) return false;
   if (_modelFilters.cost && m._costs.indexOf(_modelFilters.cost) === -1) return false;
   if (_modelFilters.status === 'disabled' && !m._disabled) return false;
   if (_modelFilters.status === 'enabled' && m._disabled) return false;
   return true;
 }
 
+// 工具栏「来源」筛选：按一级来源分组 key 生成选项
 function buildProviderOptions(merged) {
   const sel = _('modelFilterProvider');
   if (!sel) return;
-  const keys = Array.from(new Set(merged.map(modelProviderKey))).sort(providerSortKey);
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">' + t('全部提供商') + '</option>' +
-    keys.map(k => '<option value="' + esc(k) + '"' + (k === cur ? ' selected' : '') + '>' + esc(modelProviderLabel(k)) + '</option>').join('');
+  const keys = Array.from(new Set(merged.map(sourceGroupKey))).sort(sourceSortKey);
+  const cur = _modelFilters.provider || sel.value;
+  sel.innerHTML = '<option value="">' + t('全部来源') + '</option>' +
+    keys.map(k => '<option value="' + escAttr(k) + '"' + (k === cur ? ' selected' : '') + '>' + esc(sourceGroupLabel(k)) + '</option>').join('');
 }
 
 function renderModelStats(merged) {
@@ -2839,6 +3522,11 @@ function renderModelRow(m) {
   }
   for (const s of m._sources) {
     if (s === 'custom') tags += '<span class="model-source-badge custom">' + t('自定义') + '</span>';
+    else if (s === 'provider') {
+      // 别名标识： Provider 来源的 badge 显示真实名称（多源同名模型全部列出）
+      const n = (m._provNames && m._provNames.length) ? m._provNames.join(' · ') : (m.provider || MODEL_SOURCE_LABEL[s]);
+      tags += '<span class="model-source-badge provider" title="' + esc(m.id) + '">' + esc(n) + '</span>';
+    }
     else tags += '<span class="model-source-badge ' + s + '">' + MODEL_SOURCE_LABEL[s] + '</span>';
   }
   let meta = '';
@@ -2858,7 +3546,7 @@ function renderModelRow(m) {
   '</div>';
 }
 
-// 模型管理列表渲染：按提供商分组 + 工具栏筛选；组可折叠、可批量启停
+// 模型管理列表渲染：两级分组（来源 → 厂商）+ 工具栏筛选；两级都可折叠、可批量启停
 function renderModelList() {
   const listEl = _('modelsList');
   if (!listEl) return;
@@ -2874,37 +3562,58 @@ function renderModelList() {
     listEl.innerHTML = '<div class="empty">' + t('无匹配模型') + '</div>';
     return;
   }
-  const groups = new Map();
+  // 一级：来源；二级：厂商
+  const sources = new Map(); // sourceKey -> Map(vendorKey -> rows[])
   for (const m of filtered) {
-    const k = modelProviderKey(m);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(m);
+    const sk = sourceGroupKey(m);
+    const vk = vendorKey(m);
+    if (!sources.has(sk)) sources.set(sk, new Map());
+    const vmap = sources.get(sk);
+    if (!vmap.has(vk)) vmap.set(vk, []);
+    vmap.get(vk).push(m);
   }
-  listEl.innerHTML = Array.from(groups.keys()).sort(providerSortKey).map(k => {
-    const items = groups.get(k).sort((a, b) => a.id.localeCompare(b.id));
-    const open = _modelGroupOpen[k] !== false;
-    return '<div class="model-group">' +
-      '<div class="model-group-head' + (open ? ' expanded' : '') + '" data-key="' + esc(k) + '" onclick="toggleModelGroup(\'' + esc(k) + '\')" title="' + t('点击展开/折叠') + '">' +
-        '<span class="model-group-caret">▸</span>' +
-        '<span class="model-group-label">' + esc(modelProviderLabel(k)) + '</span>' +
-        '<span class="model-group-count">' + items.length + '</span>' +
-        '<span class="model-group-actions" onclick="event.stopPropagation()">' +
-          '<button class="btn" onclick="toggleModelsBatch(\'' + esc(k) + '\', false)">' + t('全部启用') + '</button>' +
-          '<button class="btn" onclick="toggleModelsBatch(\'' + esc(k) + '\', true)">' + t('全部停用') + '</button>' +
-        '</span>' +
-      '</div>' +
-      '<div class="model-group-body" style="display:' + (open ? 'block' : 'none') + '">' + items.map(renderModelRow).join('') + '</div>' +
+  const groupActions = () =>
+    '<span class="model-group-actions" onclick="event.stopPropagation()">' +
+      '<button class="btn" onclick="toggleModelsBatchEl(this, false)">' + t('全部启用') + '</button>' +
+      '<button class="btn" onclick="toggleModelsBatchEl(this, true)">' + t('全部停用') + '</button>' +
+    '</span>';
+  const groupHead = (key, label, count, open, src) =>
+    '<div class="model-group-head' + (src ? ' model-group-src-head' : '') + (open ? ' expanded' : '') + '" data-key="' + escAttr(key) + '" onclick="toggleModelGroupEl(this)" title="' + t('点击展开/折叠') + '">' +
+      '<span class="model-group-caret">▸</span>' +
+      '<span class="model-group-label">' + esc(label) + '</span>' +
+      '<span class="model-group-count">' + count + '</span>' +
+      groupActions() +
+    '</div>';
+  listEl.innerHTML = Array.from(sources.keys()).sort(sourceSortKey).map(sk => {
+    const vmap = sources.get(sk);
+    let total = 0;
+    vmap.forEach(rows => { total += rows.length; });
+    const sOpen = _modelGroupOpen[sk] !== false;
+    const vendors = Array.from(vmap.keys()).sort(vendorSortKey);
+    const inner = vendors.map(vk => {
+      const rows = vmap.get(vk).slice().sort((a, b) => a.id.localeCompare(b.id));
+      const vPath = sk + '/' + vk;
+      const vOpen = _modelGroupOpen[vPath] !== false;
+      return '<div class="model-group model-group-vendor">' +
+        groupHead(vPath, vendorLabel(vk), rows.length, vOpen, false) +
+        '<div class="model-group-body" style="display:' + (vOpen ? 'block' : 'none') + '">' + rows.map(renderModelRow).join('') + '</div>' +
+      '</div>';
+    }).join('');
+    return '<div class="model-group model-group-src">' +
+      groupHead(sk, sourceGroupLabel(sk), total, sOpen, true) +
+      '<div class="model-group-body" style="display:' + (sOpen ? 'block' : 'none') + '">' + inner + '</div>' +
     '</div>';
   }).join('');
 }
 
-function toggleModelGroup(key) {
-  const head = document.querySelector('.model-group-head[data-key="' + key + '"]');
+// 折叠/展开分组（两级通用）：直接读自身 data-key，避免把 key 拼进 onclick 字符串
+function toggleModelGroupEl(head) {
   if (!head) return;
+  const key = head.dataset.key || '';
   const open = !head.classList.contains('expanded');
   head.classList.toggle('expanded', open);
-  const body = head.parentElement.querySelector('.model-group-body');
-  if (body) body.style.display = open ? 'block' : 'none';
+  const body = head.nextElementSibling; // 直接相邻的 .model-group-body
+  if (body && body.classList.contains('model-group-body')) body.style.display = open ? 'block' : 'none';
   _modelGroupOpen[key] = open;
   try { localStorage.setItem(MODEL_GROUP_OPEN_KEY, JSON.stringify(_modelGroupOpen)); } catch (e) {}
 }
@@ -2922,10 +3631,26 @@ async function toggleModel(id, disabled) {
   if (_('settingDefModel')) loadConfig();
 }
 
-async function toggleModelsBatch(providerKey, disabled) {
-  const ids = mergeModelsById(_cachedModels)
-    .filter(m => modelProviderKey(m) === providerKey)
-    .map(m => m.id);
+// 将分组 key 解析为合并行集合：src:xxx 匹配整个来源；src:xxx/vendor 匹配单一厂商
+function mergedRowsForGroupKey(key) {
+  const merged = mergeModelsById(_cachedModels);
+  if (!key || key.indexOf('src:') !== 0) return merged.filter(m => vendorKey(m) === key);
+  const slash = key.indexOf('/');
+  if (slash === -1) return merged.filter(m => sourceGroupKey(m) === key);
+  const srcKey = key.slice(0, slash);
+  const vKey = key.slice(slash + 1);
+  return merged.filter(m => sourceGroupKey(m) === srcKey && vendorKey(m) === vKey);
+}
+
+// 分组按钮入口：从按钮所在分组头读取 key（两级通用）
+function toggleModelsBatchEl(btn, disabled) {
+  const head = btn && btn.closest ? btn.closest('.model-group-head') : null;
+  if (!head) return;
+  toggleModelsBatch(head.dataset.key || '', disabled);
+}
+
+async function toggleModelsBatch(groupKey, disabled) {
+  const ids = mergedRowsForGroupKey(groupKey).map(m => m.id);
   if (!ids.length) return;
   try {
     await api('POST', '/models/toggle', { ids: ids, disabled: disabled });
@@ -2933,6 +3658,37 @@ async function toggleModelsBatch(providerKey, disabled) {
   } catch (e) {
     toast(t('保存失败: ') + e.message, 'error');
   }
+  await loadModels();
+  if (_('settingDefModel')) loadConfig();
+}
+
+// 免费导向的批量开关：一次作用于全部合并行（不受工具栏筛选影响）
+async function bulkModelToggle(mode) {
+  const merged = mergeModelsById(_cachedModels);
+  let rows, disabled, btn, confirmMsg;
+  if (mode === 'free') {
+    rows = merged.filter(m => m._costs.indexOf('free') !== -1);
+    disabled = false;
+    btn = _('bulkEnableFreeBtn');
+    confirmMsg = t('确定启用全部免费模型？');
+  } else {
+    // 停用付费：仅纯付费模型（free+pass 混合的保持启用，优先保免费）
+    rows = merged.filter(m => m._costs.indexOf('pass') !== -1 && m._costs.indexOf('free') === -1);
+    disabled = true;
+    btn = _('bulkDisablePaidBtn');
+    confirmMsg = t('确定停用全部付费模型？');
+  }
+  const ids = rows.map(m => m.id);
+  if (!ids.length) { toast(t('没有符合条件的模型'), 'info'); return; }
+  if (!window.confirm(confirmMsg + ' (' + ids.length + ')')) return;
+  if (btn) btn.disabled = true;
+  try {
+    await api('POST', '/models/toggle', { ids: ids, disabled: disabled });
+    toast((disabled ? t('已停用') : t('已启用')) + ' ' + ids.length + ' ' + t('个模型'), 'success');
+  } catch (e) {
+    toast(t('保存失败: ') + e.message, 'error');
+  }
+  if (btn) btn.disabled = false;
   await loadModels();
   if (_('settingDefModel')) loadConfig();
 }
@@ -3241,6 +3997,7 @@ async function loadConfig() {
 // ========== 请求日志 ==========
 let logCursor = '';
 let logHasMore = false;
+let _logRowSeq = 0;
 
 const formatDuration = ms => {
   if (!ms || ms <= 0) return '-';
@@ -3249,8 +4006,57 @@ const formatDuration = ms => {
 };
 const formatTPS = v => (!v || v <= 0) ? '-' : v.toFixed(1);
 
+// 尝试链路结果标签（成功/失败/跳过）
+function attemptOutcomeLabel(o) {
+  if (o === 'success') return t('成功');
+  if (o === 'skipped') return t('跳过');
+  return t('失败');
+}
+
+// 尝试链路渲染：序号 / 模型 / 上游 / 结果 / HTTP 状态 / 耗时 / 原因
+function renderAttempts(attempts) {
+  return '<ol class="log-attempts">' + attempts.map((a, i) => {
+    const outcome = a.outcome || 'failed';
+    const oc = (outcome === 'success' || outcome === 'failed' || outcome === 'skipped') ? outcome : 'failed';
+    const meta = [];
+    if (a.upstream) meta.push(esc(a.upstream));
+    if (a.status) meta.push('HTTP ' + esc(String(a.status)));
+    if (typeof a.durationMs === 'number' && a.durationMs >= 0) meta.push(formatDuration(a.durationMs));
+    return '<li>' +
+      '<span class="combo-entry-idx">' + (i + 1) + '</span>' +
+      '<span class="attempt-model">' + esc(a.model || '-') + '</span>' +
+      '<span class="attempt-outcome ' + oc + '">' + esc(attemptOutcomeLabel(outcome)) + '</span>' +
+      (meta.length ? '<span class="attempt-meta">' + meta.join(' · ') + '</span>' : '') +
+      (a.reason ? '<span class="attempt-reason">' + esc(a.reason) + '</span>' : '') +
+    '</li>';
+  }).join('') + '</ol>';
+}
+
+// 日志模型单元格：服务模型 + 组合徽章 + 回退计数（requestedModel 与服务模型不同时一并显示）
+function logModelCell(l) {
+  let html = '<span class="mono" style="font-size:11px">' + esc(l.model || '-') + '</span>';
+  if (l.requestedModel && l.requestedModel !== l.model) {
+    html += '<span class="log-req-model">' + t('请求: ') + esc(l.requestedModel) + '</span>';
+  }
+  if (l.comboId) {
+    html += '<span class="log-combo-badge">' + t('组合') + ': ' + esc(l.comboName || l.comboId) + '</span>';
+  }
+  if (l.fallbackUsed) {
+    const n = Number(l.fallbackCount) || 0;
+    html += '<span class="log-fallback-badge">' + t('回退') + (n > 0 ? ' ' + n : '') + '</span>';
+  }
+  return '<div class="log-model-cell">' + html + '</div>';
+}
+
+// 表格行展开/收起尝试链路详情行
+function toggleLogDetail(id) {
+  const el = _(id);
+  if (!el) return;
+  el.style.display = (el.style.display === 'none' || !el.style.display) ? '' : 'none';
+}
+
 async function loadRequestLogs(reset) {
-  if (reset) logCursor = '';
+  if (reset) { logCursor = ''; _logRowSeq = 0; }
   const cursor = logCursor;
   try {
     const path = '/request-logs?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
@@ -3277,16 +4083,26 @@ async function loadRequestLogs(reset) {
       const tk = l.usageAvailable
         ? formatTokenCount(l.inputTokens) + '</td><td>' + formatTokenCount(l.outputTokens) + '</td><td>' + formatTokenCount(l.cachedTokens) + '</td><td>' + formatTokenCount(l.totalTokens)
         : '-</td><td>-</td><td>-</td><td>-';
-      return '<tr>' +
+      const attempts = Array.isArray(l.attempts) ? l.attempts : [];
+      const hasAttempts = attempts.length > 0;
+      const idx = _logRowSeq++;
+      const detailId = 'logDetail' + idx;
+      const rowAttr = hasAttempts
+        ? ' class="log-row has-attempts" onclick="toggleLogDetail(\'' + detailId + '\')" title="' + t('点击查看尝试链路') + '"'
+        : ' class="log-row"';
+      return '<tr' + rowAttr + '>' +
         '<td class="mono" style="font-size:11px">' + ts + '</td>' +
         '<td>' + esc(l.accountEmail || l.upstream || '-') + '</td>' +
         '<td>' + esc(l.protocol || '-') + '</td>' +
-        '<td class="mono" style="font-size:11px">' + esc(l.model || '-') + '</td>' +
+        '<td>' + logModelCell(l) + '</td>' +
         '<td>' + tk + '</td>' +
         '<td>' + formatDuration(l.durationMs) + '</td>' +
         '<td>' + (l.ttftMs ? formatDuration(l.ttftMs) : '-') + '</td>' +
         '<td>' + formatTPS(l.outputTokensPerSecond) + '</td>' +
-        '<td>' + st + '</td></tr>';
+        '<td>' + st + '</td></tr>' +
+        (hasAttempts
+          ? '<tr id="' + detailId + '" class="log-detail" style="display:none"><td colspan="12" class="log-detail-cell">' + renderAttempts(attempts) + '</td></tr>'
+          : '');
     };
     const renderCard = l => {
       const ts = l.startedAt ? new Date(l.startedAt).toLocaleString(LC()) : '-';
@@ -3294,6 +4110,19 @@ async function loadRequestLogs(reset) {
       const tk = l.usageAvailable
         ? t('输入 ') + formatTokenCount(l.inputTokens) + t(' · 输出 ') + formatTokenCount(l.outputTokens) + t(' · 缓存 ') + formatTokenCount(l.cachedTokens) + t(' · 总 ') + formatTokenCount(l.totalTokens)
         : t('Token 未知');
+      const attempts = Array.isArray(l.attempts) ? l.attempts : [];
+      let extra = '';
+      if (l.comboId) extra += '<span class="log-combo-badge">' + t('组合') + ': ' + esc(l.comboName || l.comboId) + '</span>';
+      if (l.fallbackUsed) {
+        const n = Number(l.fallbackCount) || 0;
+        extra += '<span class="log-fallback-badge">' + t('回退') + (n > 0 ? ' ' + n : '') + '</span>';
+      }
+      const extraBlock = extra ? '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">' + extra + '</div>' : '';
+      const reqLine = (l.requestedModel && l.requestedModel !== l.model)
+        ? '<div class="log-req-model" style="margin-bottom:6px">' + t('请求: ') + esc(l.requestedModel) + '</div>' : '';
+      const attemptsBlock = attempts.length
+        ? '<details class="log-card-attempts"><summary>' + t('尝试链路') + ' (' + attempts.length + ')</summary>' + renderAttempts(attempts) + '</details>'
+        : '';
       return '<article class="account-card">' +
         '<div class="account-card-header"><span class="account-email">' + esc(l.accountEmail || l.upstream || '-') + '</span><span class="log-status ' + (l.completed ? 'ok' : 'fail') + '">' + st + '</span></div>' +
         '<div class="account-metrics">' +
@@ -3302,8 +4131,10 @@ async function loadRequestLogs(reset) {
           '<div class="account-metric"><span class="account-metric-label">TTFT</span><span class="account-metric-value">' + (l.ttftMs ? formatDuration(l.ttftMs) : '-') + '</span></div>' +
           '<div class="account-metric"><span class="account-metric-label">tok/s</span><span class="account-metric-value">' + formatTPS(l.outputTokensPerSecond) + '</span></div>' +
         '</div>' +
+        extraBlock + reqLine +
         '<div style="font-size:12px;color:var(--text2);margin-bottom:8px">' + tk + '</div>' +
         '<div class="account-card-footer"><span class="mono" style="font-size:11px">' + ts + '</span><span class="mono" style="font-size:11px">' + esc(l.model || '-') + '</span></div>' +
+        attemptsBlock +
       '</article>';
     };
 

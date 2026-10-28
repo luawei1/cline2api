@@ -170,6 +170,45 @@ func getAllModels() []Model {
 	return result
 }
 
+// buildModelsList 组装客户端发现用的模型列表（/v1/models、/models）：
+// 池内模型（已停用的排除，onlyFree 时仅免费）+ 启用中的具名模型组合。
+//
+// 组合不插入 pool.Models（避免污染上游归属 / 同步 / 删除 / Cline-Zen 分流判定），
+// 只在此发现层追加，owned_by="combo" 便于客户端区分。组合可能跨免费/付费源，故
+// 不受 onlyFree 过滤影响（组合是管理员显式选择的集合，不是单一计费模型）。
+func buildModelsList(onlyFree bool) []map[string]any {
+	all := getAllModels()
+	list := make([]map[string]any, 0, len(all))
+	for _, m := range all {
+		// 管理员手动停用的模型不进客户端模型列表
+		if m.Disabled {
+			continue
+		}
+		if onlyFree && !isFreeModelEntry(m) {
+			continue
+		}
+		ownedBy := "cline"
+		if m.Source == "zen" || m.Provider == "opencode" {
+			ownedBy = "opencode"
+		}
+		list = append(list, map[string]any{
+			"id":       m.ID,
+			"object":   "model",
+			"created":  time.Now().UnixMilli(),
+			"owned_by": ownedBy,
+		})
+	}
+	for _, c := range comboEnabledList() {
+		list = append(list, map[string]any{
+			"id":       c.ID,
+			"object":   "model",
+			"created":  time.Now().UnixMilli(),
+			"owned_by": "combo",
+		})
+	}
+	return list
+}
+
 // getDefaultModel 返回用户设置的默认模型；未设置时优先回退到第一个远程 free 模型，
 // 否则用内置 fallback。
 func getDefaultModel() string {
@@ -344,6 +383,8 @@ func startProxy(host string, port int) error {
 	log.Printf("Data directory: %s (set %s to override)", currentDataDir(), dataDirEnv)
 	p := loadPool()
 	loadRequestLogs()
+	// 自定义 provider 声明的模型同步进池：模型管理页可见、可启停、参与自动回退
+	syncProviderModels()
 	activeCount := 0
 	for _, a := range p.Accounts {
 		if a.Status == "active" {
@@ -429,28 +470,7 @@ func startProxy(host string, port int) error {
 	}
 
 	modelsHandler := apiKeyHandler(func(w http.ResponseWriter, r *http.Request) {
-		onlyFree := getProxyConfig().OnlyFree
-		all := getAllModels()
-		list := make([]map[string]any, 0, len(all))
-		for _, m := range all {
-			// 管理员手动停用的模型不进客户端模型列表
-			if m.Disabled {
-				continue
-			}
-			if onlyFree && !isFreeModelEntry(m) {
-				continue
-			}
-			ownedBy := "cline"
-			if m.Source == "zen" || m.Provider == "opencode" {
-				ownedBy = "opencode"
-			}
-			list = append(list, map[string]any{
-				"id":       m.ID,
-				"object":   "model",
-				"created":  time.Now().UnixMilli(),
-				"owned_by": ownedBy,
-			})
-		}
+		list := buildModelsList(getProxyConfig().OnlyFree)
 		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": list})
 	})
 	mux.HandleFunc("/v1/models", modelsHandler)
@@ -516,6 +536,47 @@ func startProxy(host string, port int) error {
 					params["messages"] = append([]any{map[string]any{"role": "system", "content": override}}, msgs...)
 				}
 			}
+		}
+
+		// 模型组合：具名有序回退。命中组合时在普通路由之前分流 —— 组合 ID 不是
+		// 真实上游模型，必须在此拦截，按管理员配置的顺序逐个尝试；不会走全局
+		// ModelChain / free 链（除非组合显式开启 emergencyFallback）。
+		if combo, ok := findCombo(model); ok {
+			if !combo.Enabled {
+				msg := fmt.Sprintf("model combo %q is disabled", model)
+				finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, msg)
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error": map[string]string{"message": msg, "type": "invalid_request_error"},
+				})
+				return
+			}
+			reqLog.toolNames = clampParamsToolNames(params)
+			run := runCombo(params, combo, isStream, requestSessionID(params, r.Header))
+			applyComboTrace(&reqLog, combo, run)
+			stampUpstream(&reqLog, params) // 归因实际服务方（provider / opencode / cline）
+			if run.Acc != nil {
+				reqLog.AccountID = run.Acc.AccountID
+				reqLog.AccountEmail = run.Acc.Email
+			}
+			if run.Err != nil {
+				log.Printf("  combo %q error: %v", combo.ID, run.Err)
+				msg := comboTraceSummary(combo, run)
+				finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, msg)
+				writeJSON(w, clineErrorHTTPStatus(run.Err), map[string]any{
+					"error": map[string]string{"message": msg, "type": "api_error"},
+				})
+				return
+			}
+			defer run.Resp.Body.Close()
+			// 非流式：完整按条目顺序回退。流式：仅在连接级回退（runCombo 在写任何
+			// 字节给客户端前拿到 200 响应）；与既有 chat/responses 架构一致，建流后
+			// 的预提交中断不重开（Anthropic 端点另有 streamAnthropicCombo 的预提交回退）。
+			if isStream {
+				handleStreamResponse(w, run.Resp, run.Acc, &reqLog)
+			} else {
+				handleNonStreamResponse(w, run.Resp, run.Acc, &reqLog)
+			}
+			return
 		}
 
 		// 按 model 自动分流：zen 免费模型 / zen 付费拒绝 / 其余走 Cline 池
@@ -1221,7 +1282,7 @@ func callClineAPI(params map[string]any, stream bool) (*http.Response, *Account,
 				params[servedByParam] = upstreamProvider
 				return pResp, nil, nil
 			}
-			log.Printf("  provider attempt failed for %q: %v", m, pErr)
+			// callCustomProviderAPI 已逐个记录 provider 失败原因，链上不重复打日志
 		}
 
 		// 点名模型保持原有轮询语义；链上的降级模型改用「最久未用优先」，
@@ -1334,6 +1395,11 @@ func defaultFreeChain() []string {
 		if remote && m.Source == "remote" && m.Cost == "free" && m.Status == "active" {
 			remoteFree = append(remoteFree, m.ID)
 		}
+		// 启用中自定义 provider 的免费模型参与自动回退（provider 失败时也会被
+		// callFreeClineAPI 内的 callCustomProviderAPI 尝试，其次才是账号池）
+		if m.Source == "provider" && m.Cost == "free" && m.Status == "active" && !m.Disabled {
+			remoteFree = append(remoteFree, m.ID)
+		}
 	}
 	chain := make([]string, 0, len(remoteFree)+len(freeModelChain))
 	seen := make(map[string]bool, len(remoteFree)+len(freeModelChain))
@@ -1362,17 +1428,23 @@ func defaultFreeChain() []string {
 // 调用方须持有 poolMu；providers 走独立的 providersMu，仓库内不存在反向持锁路径。
 func liveModelSet(p *AccountPool) map[string]bool {
 	live := make(map[string]bool, len(p.Models))
+	disabled := make(map[string]bool)
 	for _, m := range p.Models {
 		if m.Disabled {
+			disabled[m.ID] = true
 			continue
 		}
 		live[m.ID] = true
 	}
+	// provider 声明的模型（已同步进池的直接生效；池内被停用的一致排除）
 	for _, sp := range listProviders() {
 		if !sp.Enabled {
 			continue
 		}
 		for _, id := range sp.ModelIDs {
+			if disabled[id] {
+				continue
+			}
 			live[id] = true
 		}
 	}
@@ -1504,7 +1576,7 @@ func callFreeClineAPI(params map[string]any, stream bool) (*http.Response, *Acco
 				params[servedByParam] = upstreamProvider
 				return pResp, nil, nil
 			}
-			log.Printf("  provider attempt failed for %q: %v", model, pErr)
+			// callCustomProviderAPI 已逐个记录 provider 失败原因，链上不重复打日志
 		}
 		// "free" 链是纯降级路径：全部用「最久未用优先」挑账号，摊平用量。
 		for {
@@ -2679,6 +2751,63 @@ func handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 模型组合：在普通路由之前分流（组合 ID 不是真实上游模型）。按配置顺序回退，
+	// 默认不触发全局 ModelChain / free 链。
+	if combo, ok := findCombo(req.Model); ok {
+		if !combo.Enabled {
+			msg := fmt.Sprintf("model combo %q is disabled", req.Model)
+			finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, msg)
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]string{"message": msg, "type": "invalid_request_error"},
+			})
+			return
+		}
+		sessionID := requestSessionID(map[string]any{"session_id": r.Header.Get("x-opencode-session")}, nil)
+		reqLog.toolNames = clampParamsToolNames(openAIReq)
+
+		if req.Stream {
+			streamAnthropicCombo(r.Context(), w, openAIReq, combo, &reqLog, sessionID)
+			return
+		}
+
+		run := runCombo(openAIReq, combo, false, sessionID)
+		applyComboTrace(&reqLog, combo, run)
+		stampUpstream(&reqLog, openAIReq)
+		if run.Acc != nil {
+			reqLog.AccountID = run.Acc.AccountID
+			reqLog.AccountEmail = run.Acc.Email
+		}
+		if run.Err != nil {
+			log.Printf("  anthropic combo %q error: %v", combo.ID, run.Err)
+			msg := comboTraceSummary(combo, run)
+			finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, msg)
+			writeJSON(w, clineErrorHTTPStatus(run.Err), map[string]any{
+				"error": map[string]string{"message": msg, "type": "api_error"},
+			})
+			return
+		}
+		defer run.Resp.Body.Close()
+		var raw map[string]any
+		if err := json.NewDecoder(run.Resp.Body).Decode(&raw); err != nil {
+			finalizeRequestLog(&reqLog, tokenUsage{}, time.Time{}, reqLog.StartedAt, false, "decode response: "+err.Error())
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": map[string]string{"message": err.Error(), "type": "parse_error"},
+			})
+			return
+		}
+		out := normalizeOpenAIResponse(unwrapDataEnvelope(raw))
+		usage := parseTokenUsage(out["usage"])
+		recordTokenUsage(run.Acc, reqLog.Model, usage)
+		finalizeRequestLog(&reqLog, usage, time.Time{}, reqLog.StartedAt, true, "")
+		restoreToolCallsInResponse(out, reqLog.toolNames)
+		anthropicResp := openAIToAnthropic(out)
+		if hasToolUseBlocks(anthropicResp["content"]) {
+			anthropicResp["stop_reason"] = "tool_use"
+		}
+		writeJSON(w, http.StatusOK, anthropicResp)
+		return
+	}
+
 	// 按 model 自动分流（与 chat 端点一致）：zen 免费/付费拒绝/Cline 池
 	switch routeModel(req.Model) {
 	case "reject":
@@ -2955,6 +3084,118 @@ func finishAnthropicStreamFailure(sw *sseWriter, w http.ResponseWriter, reqLog *
 	writeJSON(w, status, map[string]any{
 		"error": map[string]string{"message": msg, "type": "api_error"},
 	})
+}
+
+// streamAnthropicCombo 组合的 Anthropic 流式路径：按配置顺序逐个条目尝试，仅在
+// **尚未向客户端产出任何内容**（文本 / thinking / 具名工具调用）时才切换到下一个
+// 条目 —— 复用 handleAnthropicStream 的预提交可重试语义与共享 sseWriter（信封只发
+// 一次）。一旦已经交付有意义的内容，该次尝试即视为完成，绝不把答案重开到另一个模型。
+// 尝试次数被组合的可用条目数上界约束，避免无限回退。
+func streamAnthropicCombo(ctx context.Context, w http.ResponseWriter, params map[string]any, combo ModelCombo, reqLog *RequestLog, sessionID string) {
+	sw := newSSEWriter(w)
+
+	type cand struct {
+		model string
+		entry ComboEntry
+		order int
+	}
+	var cands []cand
+	seen := map[string]bool{}
+	trace := make([]AttemptLog, 0, len(combo.Entries))
+	for i, e := range combo.Entries {
+		m := strings.TrimSpace(e.Model)
+		if m == "" {
+			continue
+		}
+		if e.Disabled {
+			trace = append(trace, AttemptLog{Model: m, Order: i + 1, Outcome: "skipped", Reason: "entry disabled by admin",
+				Source: strings.TrimSpace(e.Source), Provider: strings.TrimSpace(e.Provider)})
+			continue
+		}
+		key := comboEntryKey(e)
+		if seen[key] || isModelDisabled(m) {
+			reason := "duplicate entry"
+			if isModelDisabled(m) {
+				reason = "model disabled by admin"
+			}
+			trace = append(trace, AttemptLog{Model: m, Order: i + 1, Outcome: "skipped", Reason: reason,
+				Source: strings.TrimSpace(e.Source), Provider: strings.TrimSpace(e.Provider)})
+			continue
+		}
+		seen[key] = true
+		cands = append(cands, cand{model: m, entry: e, order: i + 1})
+	}
+	// 预置组合字段：handleAnthropicStream 成功时会直接 finalize 请求日志。
+	applyComboLog(reqLog, combo, trace, "")
+	stampUpstream(reqLog, params)
+
+	if len(cands) == 0 {
+		finishAnthropicStreamFailure(sw, w, reqLog, http.StatusBadGateway,
+			"combo has no eligible entries", "combo has no eligible entries")
+		return
+	}
+
+	for idx, c := range cands {
+		if ctx.Err() != nil {
+			return
+		}
+		start := time.Now()
+		resp, acc, upstream, err := callSingleModel(params, c.entry, true, sessionID)
+		if err != nil {
+			trace = append(trace, AttemptLog{Model: c.model, Order: c.order, Upstream: upstream, Status: attemptStatus(err),
+				Outcome: "failed", Reason: truncate(err.Error(), 200), DurationMs: time.Since(start).Milliseconds(),
+				Source: strings.TrimSpace(c.entry.Source), Provider: strings.TrimSpace(c.entry.Provider)})
+			applyComboLog(reqLog, combo, trace, "")
+			if !comboRetryable(err) {
+				break
+			}
+			continue
+		}
+		params["model"] = c.model
+		if upstream == upstreamProvider {
+			params[servedByParam] = upstreamProvider
+		} else {
+			delete(params, servedByParam)
+		}
+		// 每次成功建流后按实际服务方重算归因（流式组合此前只在循环外 stamp 过一次，
+		// 会把 provider/zen 条目错记为 cline）。
+		stampUpstream(reqLog, params)
+		if acc != nil {
+			reqLog.AccountID = acc.AccountID
+			reqLog.AccountEmail = acc.Email
+		}
+		// 乐观写入成功条目：handleAnthropicStream 成功后会直接 finalize 落盘。
+		trace = append(trace, AttemptLog{Model: c.model, Order: c.order, Upstream: upstream,
+			Outcome: "success", DurationMs: time.Since(start).Milliseconds(),
+			Source: strings.TrimSpace(c.entry.Source), Provider: strings.TrimSpace(c.entry.Provider)})
+		applyComboLog(reqLog, combo, trace, c.model)
+
+		if handleAnthropicStream(ctx, sw, resp, acc, reqLog, firstContentTimeoutForAttempt(idx+1, len(cands))) {
+			return // 已交付内容 / 已完整收尾（含带内 error）
+		}
+		resp.Body.Close()
+		if ctx.Err() != nil {
+			return // 客户端断开：不是模型失败
+		}
+		// 预提交失败：把乐观成功条目改写为失败，冷却该条目模型，换下一个条目。
+		trace[len(trace)-1] = AttemptLog{Model: c.model, Order: c.order, Upstream: upstream,
+			Outcome: "failed", Reason: "stream produced no content before first token",
+			DurationMs: time.Since(start).Milliseconds(),
+			Source:     strings.TrimSpace(c.entry.Source), Provider: strings.TrimSpace(c.entry.Provider)}
+		applyComboLog(reqLog, combo, trace, "")
+		// 仅当组合里还有下一个条目时才冷却该模型（避免单条目组合冷却掉唯一模型，
+		// 让下一次请求直接失败）；不再用全局 modelFallbackChain 作为判定依据。
+		if acc != nil && c.model != "" && idx+1 < len(cands) {
+			setModelCooldown(acc, c.model, time.Now().Add(streamFailoverCooldown))
+			log.Printf("  combo %q: model %q produced no content, cooling %s and failing over", combo.ID, c.model, streamFailoverCooldown)
+		}
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	log.Printf("  combo %q: giving up after %d attempt(s) with no content", combo.ID, len(cands))
+	finishAnthropicStreamFailure(sw, w, reqLog, http.StatusBadGateway,
+		"combo stream failed before first token", "upstream stream failed before first token")
 }
 
 func streamAnthropicWithRetry(ctx context.Context, w http.ResponseWriter, fetch func() (*http.Response, *Account, error), reqLog *RequestLog) {

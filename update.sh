@@ -52,7 +52,12 @@ fi
 
 if [ "$TESTS" = 1 ]; then
   say "Running tests"
-  go test ./...
+  # 隔离测试的数据目录：单测会通过 setProxyConfig/upsertProvider 落盘，若数据目录
+  # 仍是仓库根目录，会覆盖用户真实的 .cline-config.json（模型组合/配置）等文件。
+  # 注意：各包的 TestMain 也会重定向；这里是覆盖 `./...` 全部包的额外防线。
+  TEST_DATA_DIR=$(mktemp -d)
+  trap 'rm -rf "$TEST_DATA_DIR"' EXIT
+  CLINE2API_DATA_DIR="$TEST_DATA_DIR" go test ./...
 fi
 
 say "Building"
