@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -250,4 +251,77 @@ func finalizeRequestLog(entry *RequestLog, usage tokenUsage, firstOutputAt time.
 	}
 
 	appendRequestLog(*entry)
+}
+
+// modelUsageEntry 按模型聚合的用量（仪表盘「模型用量统计」）。
+type modelUsageEntry struct {
+	Model        string `json:"model"`
+	Upstream     string `json:"upstream"`
+	Requests     int64  `json:"requests"`
+	InputTokens  int64  `json:"inputTokens"`
+	OutputTokens int64  `json:"outputTokens"`
+	CachedTokens int64  `json:"cachedTokens"`
+	TotalTokens  int64  `json:"totalTokens"`
+
+	TodayRequests     int64 `json:"todayRequests"`
+	TodayInputTokens  int64 `json:"todayInputTokens"`
+	TodayOutputTokens int64 `json:"todayOutputTokens"`
+	TodayTotalTokens  int64 `json:"todayTotalTokens"`
+}
+
+// modelUsageStats 把请求日志按模型聚合，累计与今日两套口径，按累计总 Token 降序。
+// 同一模型可能经故障转移落到不同上游（reqLog.Upstream 各异），上游去重后用 "/" 连接。
+// 只统计内存中保留的日志（requestLogMaxEntries / requestLogMaxAge 窗口内）。
+func modelUsageStats() []modelUsageEntry {
+	requestLogsMu.Lock()
+	defer requestLogsMu.Unlock()
+
+	today := time.Now().Format("2006-01-02")
+	type agg struct {
+		e   modelUsageEntry
+		ups map[string]bool
+	}
+	order := make([]string, 0, 16)
+	byModel := make(map[string]*agg, 16)
+	get := func(model string) *agg {
+		if a, ok := byModel[model]; ok {
+			return a
+		}
+		a := &agg{ups: make(map[string]bool, 2)}
+		a.e.Model = model
+		byModel[model] = a
+		order = append(order, model)
+		return a
+	}
+	for _, e := range requestLogs {
+		a := get(e.Model)
+		a.e.Requests++
+		a.e.InputTokens += e.InputTokens
+		a.e.OutputTokens += e.OutputTokens
+		a.e.CachedTokens += e.CachedTokens
+		a.e.TotalTokens += e.TotalTokens
+		if e.Upstream != "" {
+			a.ups[e.Upstream] = true
+		}
+		if e.StartedAt.Format("2006-01-02") == today {
+			a.e.TodayRequests++
+			a.e.TodayInputTokens += e.InputTokens
+			a.e.TodayOutputTokens += e.OutputTokens
+			a.e.TodayTotalTokens += e.TotalTokens
+		}
+	}
+
+	out := make([]modelUsageEntry, 0, len(order))
+	for _, model := range order {
+		a := byModel[model]
+		ups := make([]string, 0, len(a.ups))
+		for u := range a.ups {
+			ups = append(ups, u)
+		}
+		sort.Strings(ups)
+		a.e.Upstream = strings.Join(ups, "/")
+		out = append(out, a.e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TotalTokens > out[j].TotalTokens })
+	return out
 }
