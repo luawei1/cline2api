@@ -752,13 +752,16 @@ func callZenAPI(params map[string]any, stream bool) (*http.Response, error) {
 	// 两条路径统一在返回前转回 chat 协议，调用方无感
 	useResponses := zenUpstreamNeedsResponses(params)
 	protoName := "chat"
+	var body map[string]any
 	var bodyJSON []byte
 	var err error
 	if useResponses {
 		protoName = "responses"
-		bodyJSON, err = json.Marshal(buildZenResponsesBody(params))
+		body = buildZenResponsesBody(params)
+		bodyJSON, err = json.Marshal(body)
 	} else {
-		bodyJSON, err = json.Marshal(buildZenBody(params, stream, anonymous))
+		body = buildZenBody(params, stream, anonymous)
+		bodyJSON, err = json.Marshal(body)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("marshal zen body: %w", err)
@@ -784,6 +787,7 @@ func callZenAPI(params map[string]any, stream bool) (*http.Response, error) {
 		retries = 3
 	}
 	delay := time.Second
+	reasoningInjected := false
 
 	for attempt := 0; ; attempt++ {
 		req, err := http.NewRequest("POST", endpoint, bytes.NewReader(bodyJSON))
@@ -877,6 +881,20 @@ func callZenAPI(params map[string]any, stream bool) (*http.Response, error) {
 		bodyBytes := readAllLimited(resp.Body, 64<<10)
 		resp.Body.Close()
 		reason := fmt.Sprintf("zen API %d: %s", resp.StatusCode, truncate(string(bodyBytes), 500))
+
+		// GLM 系模型要求历史 assistant 消息带回 reasoning_content，客户端不回传时
+		// 上游报错（Vercel 层 400，网关可能包成 500）：按错误体匹配、补齐后立即
+		// 重试一次（只做一次，重试仍失败按普通错误报错）
+		if strings.Contains(string(bodyBytes), "reasoning_content") && strings.Contains(string(bodyBytes), "Missing required parameter") && !reasoningInjected {
+			if injectReasoningContent(body) {
+				if nb, err := json.Marshal(body); err == nil {
+					bodyJSON = nb
+					reasoningInjected = true
+					log.Printf("  zen missing reasoning_content: injected, retrying once")
+					continue
+				}
+			}
+		}
 
 		// 上游明确报「模型不存在」时清理下架残留（同步标记 Delisted 保留的模型）
 		if model := bodyParamsModel(params); model != "" && isModelGoneError(resp.StatusCode, string(bodyBytes)) {

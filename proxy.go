@@ -1043,6 +1043,58 @@ func buildUpstreamBody(params map[string]any, stream bool) map[string]any {
 	return body
 }
 
+// reasoningTextOf 提取客户端回传的推理内容：字符串直接用，块数组拼接 text 字段。
+func reasoningTextOf(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, b := range t {
+			if bm, ok := b.(map[string]any); ok {
+				if s, ok := bm["text"].(string); ok && s != "" {
+					parts = append(parts, s)
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
+}
+
+// injectReasoningContent 给历史里缺 reasoning_content 的 assistant 消息补齐：
+// 优先取同消息的 reasoning 字段（部分客户端的回传形态），否则补最小占位符 "."。
+// GLM 系模型（reflection/beam 等）要求每条历史 assistant 消息带回推理内容，
+// 缺失时上游 400 "Missing required parameter: 'messages[N].reasoning_content'"；
+// 实测空字符串同样被拒，必须是非空文本。
+func injectReasoningContent(body map[string]any) bool {
+	msgsRaw, ok := body["messages"]
+	if !ok {
+		return false
+	}
+	msgs, ok := msgsRaw.([]any)
+	if !ok {
+		return false
+	}
+	injected := false
+	for _, m := range msgs {
+		msg, ok := m.(map[string]any)
+		if !ok || msg["role"] != "assistant" {
+			continue
+		}
+		if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+			continue
+		}
+		if r := reasoningTextOf(msg["reasoning"]); r != "" {
+			msg["reasoning_content"] = r
+		} else {
+			msg["reasoning_content"] = "."
+		}
+		injected = true
+	}
+	return injected
+}
+
 func clineHeaders(token, sessionID string) http.Header {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+token)
@@ -1566,6 +1618,14 @@ func callClineAPIWithAccountCtx(ctx context.Context, acc *Account, params map[st
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		bodyStr := string(bodyBytes)
+		// GLM 系模型（reflection/beam 等）要求历史 assistant 消息带回 reasoning_content，
+		// 客户端不回传时上游报错（Vercel 层 400，Cline 网关包成 500）：
+		// 按错误体匹配、补齐后原账号立即重试一次
+		if strings.Contains(bodyStr, "reasoning_content") && strings.Contains(bodyStr, "Missing required parameter") {
+			if retryResp := retryWithInjectedReasoning(ctx, acc, body, token, sessionID); retryResp != nil {
+				return retryResp, acc, nil
+			}
+		}
 		// 429：模型级冷却 —— 只暂停该模型，账号保持可用，其他模型继续转发
 		if resp.StatusCode == 429 {
 			model, _ := body["model"].(string)
@@ -1585,10 +1645,107 @@ func callClineAPIWithAccountCtx(ctx context.Context, acc *Account, params map[st
 		return nil, acc, &clineAPIError{statusCode: resp.StatusCode, message: truncate(bodyStr, 500)}
 	}
 
+	// 流式请求：Cline 网关对「缺 reasoning_content」这类初始化失败返回 200 + SSE
+	// 错误事件（stream_initialization_failed），上面的非 200 分支抓不到。
+	// 偷看首个 data 行命中则补齐重试一次；未命中把已读字节回填到流最前，对调用方透明。
+	if stream {
+		resp2, rerr := retryStreamIfReasoningError(ctx, acc, resp, body, token, sessionID)
+		if rerr != nil {
+			return nil, acc, rerr
+		}
+		resp = resp2
+	}
+
 	acc.LastUsed = time.Now()
 	acc.UsageCount++
 	savePool()
 	return resp, acc, nil
+}
+
+// retryStreamIfReasoningError 处理流式请求的「缺 reasoning_content」初始化失败：
+// Cline 网关对这类失败返回 200 + SSE 错误事件（stream_initialization_failed），
+// 非 200 分支抓不到。偷看首个 data 行：命中错误 → 补齐重试一次（成功返回新响应，
+// 失败返回错误，原响应已关闭）；未命中 → 已读字节回填到流最前原样返回。
+func retryStreamIfReasoningError(ctx context.Context, acc *Account, resp *http.Response, body map[string]any, token, sessionID string) (*http.Response, error) {
+	br := bufio.NewReader(resp.Body)
+	var consumed []byte
+	payload := ""
+	for {
+		line, err := br.ReadString('\n')
+		consumed = append(consumed, []byte(line)...)
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "data:") {
+			payload = strings.TrimSpace(trimmed[5:])
+			break
+		}
+		if err != nil {
+			break
+		}
+	}
+	if payload == "" || payload == "[DONE]" ||
+		!strings.Contains(payload, "reasoning_content") || !strings.Contains(payload, "Missing required parameter") {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(consumed), br), resp.Body}
+		return resp, nil
+	}
+	resp.Body.Close()
+	if !injectReasoningContent(body) {
+		return nil, fmt.Errorf("upstream stream initialization failed (missing reasoning_content), nothing to inject")
+	}
+	retryBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal reasoning retry body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", clineAPIBase+"/chat/completions", bytes.NewReader(retryBody))
+	if err != nil {
+		return nil, fmt.Errorf("create reasoning retry request: %w", err)
+	}
+	req.Header = clineHeaders(token, sessionID)
+	log.Printf("  upstream stream missing reasoning_content: injected, retrying once (account=%s)", truncateEmail(acc.Email))
+	retryResp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("reasoning_content retry: %w", err)
+	}
+	if retryResp.StatusCode != http.StatusOK {
+		rb, _ := io.ReadAll(retryResp.Body)
+		retryResp.Body.Close()
+		return nil, &clineAPIError{statusCode: retryResp.StatusCode, message: truncate(string(rb), 500)}
+	}
+	return retryResp, nil
+}
+
+// retryWithInjectedReasoning 给缺 reasoning_content 的 assistant 消息补齐后原样重发一次，
+// 返回 200 响应；补齐无字段可补或重试仍失败返回 nil（失败响应已关闭）。
+func retryWithInjectedReasoning(ctx context.Context, acc *Account, body map[string]any, token, sessionID string) *http.Response {
+	if !injectReasoningContent(body) {
+		return nil
+	}
+	retryBody, err := json.Marshal(body)
+	if err != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", clineAPIBase+"/chat/completions", bytes.NewReader(retryBody))
+	if err != nil {
+		return nil
+	}
+	req.Header = clineHeaders(token, sessionID)
+	log.Printf("  upstream missing reasoning_content: injected, retrying once (account=%s)", truncateEmail(acc.Email))
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	if resp.StatusCode == http.StatusOK {
+		acc.LastUsed = time.Now()
+		acc.UsageCount++
+		savePool()
+		return resp
+	}
+	rb, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	log.Printf("  reasoning_content retry failed: %d: %s", resp.StatusCode, truncate(string(rb), 200))
+	return nil
 }
 
 type accountTestResult struct {
