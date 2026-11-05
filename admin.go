@@ -1199,11 +1199,24 @@ func handleAdminModels(w http.ResponseWriter, r *http.Request) {
 			models[i].Cost = "free"
 		}
 	}
+	// 附带探测状态供管理页徽标（绿可用/灰未知/红失败）。包装而非改 Model 结构体：
+	// Model 会落盘进池 JSON，探测状态仅存内存。匿名嵌入 → JSON 字段平铺，
+	// 前端 m.id / m.cost 等既有读取完全兼容，仅多 probe 对象。
+	withProbe := make([]modelWithProbe, 0, len(models))
+	for _, m := range models {
+		withProbe = append(withProbe, modelWithProbe{Model: m, Probe: probeStatePtr(m.ID)})
+	}
 	sync := getModelSyncResult()
 	writeAPI(w, http.StatusOK, apiResponse{Success: true, Data: map[string]any{
-		"models":   models,
+		"models":   withProbe,
 		"lastSync": sync,
 	}})
+}
+
+// modelWithProbe 管理页模型条目：池内模型 + 内存态探测状态（无信号时为 nil）。
+type modelWithProbe struct {
+	Model
+	Probe *modelProbeState `json:"probe,omitempty"`
 }
 
 // POST /admin/api/models/add  body: { id, provider?, cost? }

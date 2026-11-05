@@ -238,6 +238,10 @@ textarea{resize:vertical;min-height:88px;font-family:ui-monospace,'SF Mono','Cas
 
 .model-tag{display:inline-block;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:500;background:var(--surface2);color:var(--text2);margin:3px;border:1px solid var(--border2)}
 .delisted-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:6px;font-size:10px;color:var(--red);border:1px solid var(--red);font-weight:500}
+.probe-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500}
+.probe-badge.ok{color:#2e9e5b;border:1px solid #2e9e5b}
+.probe-badge.fail{color:var(--red);border:1px solid var(--red)}
+.probe-badge.unknown{color:var(--gray,#888);border:1px solid var(--gray,#888)}
 .model-tag.free{border-color:var(--green);color:var(--green);background:var(--green-soft)}
 .model-tag.pass{border-color:var(--yellow);color:var(--yellow);background:var(--yellow-soft)}
 .model-item{display:inline-flex;align-items:center;gap:2px;margin:3px}
@@ -1516,6 +1520,12 @@ const I18N = {
   '个账号 · 每页': ' accounts · per page ',
   '全选本页': 'Select all on this page',
   '已下架': 'Delisted',
+  '最近探测可用': 'Probe OK',
+  '真实流量': 'real traffic',
+  '主动探测': 'active probe',
+  '探测失败': 'probe failed',
+  '未知': 'unknown',
+  '尚无探测信号，等待真实流量或主动探测': 'No probe signal yet; waiting for real traffic or active probe',
   '匹配': 'Match ',
   '没有匹配的账号': 'No matching accounts',
   '请先勾选要重置的账号': 'Select accounts to reset first',
@@ -3522,6 +3532,7 @@ function mergeModelsById(models) {
         _delistedAll: !!m.delisted,
         _customAny: !!m.custom,
         _disabled: !!m.disabled,
+        _probe: m.probe || null,
       });
       continue;
     }
@@ -3535,6 +3546,8 @@ function mergeModelsById(models) {
     prev._delistedAll = prev._delistedAll && !!m.delisted;
     prev._customAny = prev._customAny || !!m.custom;
     prev._disabled = prev._disabled || !!m.disabled;
+    // 探测状态按模型 ID 记录（同 ID 多来源共享），任一条目携带即保留
+    if (m.probe) prev._probe = m.probe;
     if (!prev.provider && m.provider) prev.provider = m.provider;
     if ((m.context || 0) > prev.context) prev.context = m.context || 0;
     if ((m.output || 0) > prev.output) prev.output = m.output || 0;
@@ -3592,6 +3605,18 @@ function renderModelRow(m) {
   }
   if (m._delistedAll) {
     tags += '<span class="delisted-badge" title="' + t('已从上游官方列表移除，实测可能仍可用；同步只标记不删除，上游报模型不存在时自动清理') + '">' + t('已下架') + '</span>';
+  }
+  // 探测状态徽标：绿=最近确认可用（含耗时）/ 红=最近失败（title 悬停看完整原因）/
+  // 灰=尚无信号（首轮探测后出现）。无 m._probe 时显示未知。
+  if (m._probe && m._probe.ok) {
+    const ms = m._probe.latencyMs ? (' ' + m._probe.latencyMs + 'ms') : '';
+    tags += '<span class="probe-badge ok" title="' + escAttr(t('最近探测可用') + (m._probe.source === 'passive' ? '（' + t('真实流量') + '）' : '（' + t('主动探测') + '）')) + '">✓' + esc(ms) + '</span>';
+  } else if (m._probe) {
+    const when = m._probe.lastFail ? new Date(m._probe.lastFail).toLocaleTimeString() : '';
+    const reason = (m._probe.error || t('探测失败')) + (when ? ' @ ' + when : '');
+    tags += '<span class="probe-badge fail" title="' + escAttr(reason) + '">✗ ' + esc(t('失败')) + '</span>';
+  } else {
+    tags += '<span class="probe-badge unknown" title="' + escAttr(t('尚无探测信号，等待真实流量或主动探测')) + '">— ' + esc(t('未知')) + '</span>';
   }
   for (const s of m._sources) {
     if (s === 'custom') tags += '<span class="model-source-badge custom">' + t('自定义') + '</span>';
@@ -4021,7 +4046,12 @@ async function loadConfig() {
         const items = (_cachedModels || []).filter(m => !m.disabled && (m.cost === 'free') === (g.key === 'free'));
         if (!items.length) return;
         opts += '<optgroup label="' + esc(g.label) + ' (' + items.length + ')">' +
-          items.map(m => '<option value="' + esc(m.id) + '"' + (m.id === c.defaultModel ? ' selected' : '') + '>' + esc(m.id) + esc(g.tag) + '</option>').join('') +
+          items.map(m => {
+            // 最近探测失败的模型加 ✗ 前缀（悬停看原因），未知/可用不加前缀保持简洁
+            const fail = m.probe && !m.probe.ok;
+            const title = fail && m.probe.error ? ' title="' + escAttr(m.probe.error) + '"' : '';
+            return '<option value="' + esc(m.id) + '"' + (m.id === c.defaultModel ? ' selected' : '') + title + '>' + (fail ? '✗ ' : '') + esc(m.id) + esc(g.tag) + '</option>';
+          }).join('') +
           '</optgroup>';
       });
       sel.innerHTML = opts || '<option value="">' + t('（无可用模型）') + '</option>';

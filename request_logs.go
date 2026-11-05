@@ -250,6 +250,10 @@ func finalizeRequestLog(entry *RequestLog, usage tokenUsage, firstOutputAt time.
 		}
 	}
 
+	// 真实流量结果记为模型探测信号（被动优先：热门模型零主动探测成本）。
+	// 客户端断连/取消/本地解码等非模型归因错误不记 fail，见 passiveErrorAttributable。
+	recordPassiveProbe(entry.Model, completed, errMsg, entry.DurationMs)
+
 	appendRequestLog(*entry)
 }
 

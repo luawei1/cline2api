@@ -178,6 +178,12 @@ func getAllModels() []Model {
 // 不受 onlyFree 过滤影响（组合是管理员显式选择的集合，不是单一计费模型）。
 func buildModelsList(onlyFree bool) []map[string]any {
 	all := getAllModels()
+	// 按探测可用性稳定排序：最近确认可用=0 → 未知=1 → 最近失败=2（tier 内保持
+	// 池内原序）。无任何探测数据时全部 tier1，顺序与排序前一致（向后兼容）。
+	// 只影响 /v1/models 客户端列表；回退链排序（sortModelsByAvailability）独立。
+	sort.SliceStable(all, func(i, j int) bool {
+		return probeTier(all[i].ID) < probeTier(all[j].ID)
+	})
 	list := make([]map[string]any, 0, len(all))
 	for _, m := range all {
 		// 管理员手动停用的模型不进客户端模型列表
@@ -230,6 +236,28 @@ func getDefaultModel() string {
 		if !defaultDisabled && (!remoteModelsActive() || liveModelSet(p)[p.DefaultModel]) {
 			return p.DefaultModel
 		}
+	}
+
+	// 优先选最近探测确认可用的免费模型：固定拿「第一个远程免费模型」当默认/
+	// 账号测试探测模型时，第一个坏掉会导致账号测试、冷却恢复、无模型请求全部
+	// 误报失败（实测第一个常不通）。取最近一次成功信号最新的；无可用信号则
+	// 落到下方原逻辑（第一个远程 free 模型）。
+	var bestProbed string
+	var bestOK time.Time
+	for _, m := range p.Models {
+		if m.Disabled || !isFreeModelEntry(m) {
+			continue
+		}
+		st, ok := getProbeState(m.ID)
+		if !ok || !st.OK || st.LastOK.IsZero() {
+			continue
+		}
+		if bestProbed == "" || st.LastOK.After(bestOK) {
+			bestProbed, bestOK = m.ID, st.LastOK
+		}
+	}
+	if bestProbed != "" {
+		return bestProbed
 	}
 
 	for _, m := range p.Models {
@@ -402,6 +430,10 @@ func startProxy(host string, port int) error {
 
 	// 启动时异步同步一次 Cline 官方推荐模型（不阻塞启动）
 	startModelSync()
+
+	// 免费模型可用性探测：被动信号实时记录，主动循环补测无信号模型，
+	// 驱动 /v1/models 排序与管理页徽标（启动 10s 后首轮，错峰模型同步）
+	startModelProbeLoop()
 
 	// opencode zen：定时同步免费模型列表 + 压缩会话状态清理
 	if getZenConfig().Enabled {
@@ -1164,6 +1196,7 @@ func injectReasoningContent(body map[string]any) bool {
 //     详情收敛成 "Invalid request"（type=AI_APICallError，param.statusCode=400），
 //     不再提缺失字段——只凭错误体无法确证是 reasoning 问题，误判的代价是多一次
 //     上游往返（重试仍失败时按原错误上报）。
+//
 // 流式 200+SSE 错误事件另有网关事件码 stream_initialization_failed 兜底。
 func isReasoningMissingError(body string) bool {
 	if strings.Contains(body, "Invalid request") && strings.Contains(body, "AI_APICallError") {
@@ -1674,9 +1707,13 @@ func callClineAPIWithAccountCtx(ctx context.Context, acc *Account, params map[st
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		acc.Status = "cooldown"
-		acc.CooldownUntil = time.Now().Add(5 * time.Minute)
-		savePool()
+		// 探测请求不把账号打进冷却：批量补测撞上网络抖动会连坐全部账号，
+		// 让真实流量无号可用（冷却恢复循环虽能救回，但有 5 分钟空窗）
+		if !isProbeRequest(params) {
+			acc.Status = "cooldown"
+			acc.CooldownUntil = time.Now().Add(5 * time.Minute)
+			savePool()
+		}
 		return nil, acc, &clineAccountUnavailableError{err: fmt.Errorf("upstream request: %w", err)}
 	}
 
