@@ -97,7 +97,8 @@ func TestCallClineAPIWithAccountRetriesWithInjectedReasoningContent(t *testing.T
 }
 
 // 重试仍失败时错误照常上报（不吞错、不再无限重试）。
-func TestCallClineAPIWithAccountReasoningRetryStillFails(t *testing.T) {	calls := 0
+func TestCallClineAPIWithAccountReasoningRetryStillFails(t *testing.T) {
+	calls := 0
 	isolateRefreshState(t, func(req *http.Request) (*http.Response, error) {
 		calls++
 		return refreshStatusResponse(req, http.StatusInternalServerError,
@@ -210,5 +211,132 @@ func TestCallClineAPIStreamReplaysNormalFirstChunk(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), `"content":"ok"`) || !strings.Contains(string(body), "[DONE]") {
 		t.Fatalf("caller should receive the full original stream, got: %s", truncate(string(body), 200))
+	}
+}
+
+// 2026-11-05 实测：上游把错误体泛化成 Vercel AI_APICallError "Invalid request"，
+// 不再带 "Missing required parameter"/"reasoning_content" 字样——匹配必须认新形态。
+func TestIsReasoningMissingErrorMatchesGeneralizedVercelForm(t *testing.T) {
+	generalized := `{"error":"inference request failed: failed to invoke model 'reflection/beam-free' from Vercel: request failed with status 400: {\"error\":{\"message\":\"Invalid request\",\"type\":\"AI_APICallError\",\"param\":{\"error\":\"Invalid request\",\"statusCode\":400,\"isRetryable\":false}}}"}`
+	if !isReasoningMissingError(generalized) {
+		t.Fatal("generalized Vercel AI_APICallError Invalid request form should match")
+	}
+	sseEvent := `{"error":{"code":"stream_initialization_failed","message":"Failed to create stream: inference request failed: failed to generate stream from Vercel: request failed with status 400: {\"error\":{\"message\":\"Invalid request\",\"type\":\"AI_APICallError\"}}"}}`
+	if !isReasoningMissingError(sseEvent) {
+		t.Fatal("stream_initialization_failed SSE event should match")
+	}
+	legacy := `Missing required parameter: 'messages[2].reasoning_content'`
+	if !isReasoningMissingError(legacy) {
+		t.Fatal("legacy explicit form should still match")
+	}
+	unrelated := `model "foo" not found`
+	if isReasoningMissingError(unrelated) {
+		t.Fatalf("unrelated error should not match, got match for: %s", unrelated)
+	}
+	plainInvalid := `{"error":{"message":"Invalid request"}}`
+	if isReasoningMissingError(plainInvalid) {
+		t.Fatal("Invalid request without AI_APICallError/stream_initialization_failed marker should not match")
+	}
+}
+
+// 非流式：泛化错误体命中 → 补齐 reasoning_content 后原账号重试一次成功。
+func TestCallClineAPIWithAccountRetriesOnGeneralizedInvalidRequest(t *testing.T) {
+	var retryBody []byte
+	calls := 0
+	isolateRefreshState(t, func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return refreshStatusResponse(req, http.StatusInternalServerError,
+				`{"error":"inference request failed: failed to invoke model 'reflection/beam-free' from Vercel: request failed with status 400: {\"error\":{\"message\":\"Invalid request\",\"type\":\"AI_APICallError\",\"param\":{\"error\":\"Invalid request\",\"statusCode\":400,\"isRetryable\":false}}}"}`), nil
+		}
+		retryBody, _ = io.ReadAll(req.Body)
+		return refreshStatusResponse(req, http.StatusOK,
+			`{"id":"ok","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`), nil
+	})
+	acc := &Account{
+		AccountID:   "beam-g",
+		Email:       "beam-g@example.com",
+		AccessToken: "tok",
+		ExpiresAt:   time.Now().Add(time.Hour).UnixMilli(),
+		Status:      "active",
+	}
+	pool = &AccountPool{Accounts: []*Account{acc}}
+
+	resp, _, err := callClineAPIWithAccount(acc, map[string]any{
+		"model": "reflection/beam-free",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hi"},
+			map[string]any{"role": "assistant", "content": "hello"},
+			map[string]any{"role": "user", "content": "what did you say?"},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("should succeed via generalized-form reasoning retry: %v", err)
+	}
+	resp.Body.Close()
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want exactly one retry", calls)
+	}
+	var sent struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(retryBody, &sent); err != nil {
+		t.Fatalf("decode retry body: %v", err)
+	}
+	if got := sent.Messages[1]["reasoning_content"]; got != "." {
+		t.Fatalf("retry body assistant reasoning_content = %v, want injected placeholder %q", got, ".")
+	}
+}
+
+// 流式：泛化 SSE 错误事件（stream_initialization_failed + Invalid request）命中 → 补齐重试。
+func TestCallClineAPIStreamRetriesOnGeneralizedSSEErrorEvent(t *testing.T) {
+	var retryBody []byte
+	calls := 0
+	isolateRefreshState(t, func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return refreshStatusResponse(req, http.StatusOK,
+				"data: {\"error\":{\"code\":\"stream_initialization_failed\",\"message\":\"Failed to create stream: inference request failed: failed to generate stream from Vercel: failed to invoke model 'reflection/beam-free' with streaming: request failed with status 400: {\\\"error\\\":{\\\"message\\\":\\\"Invalid request\\\",\\\"type\\\":\\\"AI_APICallError\\\",\\\"param\\\":{\\\"statusCode\\\":400}}}\"}}\n\n"), nil
+		}
+		retryBody, _ = io.ReadAll(req.Body)
+		return refreshStatusResponse(req, http.StatusOK,
+			"data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"), nil
+	})
+	acc := &Account{
+		AccountID:   "beam-gs",
+		Email:       "beam-gs@example.com",
+		AccessToken: "tok",
+		ExpiresAt:   time.Now().Add(time.Hour).UnixMilli(),
+		Status:      "active",
+	}
+	pool = &AccountPool{Accounts: []*Account{acc}}
+
+	resp, _, err := callClineAPIWithAccount(acc, map[string]any{
+		"model": "reflection/beam-free",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hi"},
+			map[string]any{"role": "assistant", "content": "hello"},
+			map[string]any{"role": "user", "content": "what did you say?"},
+		},
+	}, true)
+	if err != nil {
+		t.Fatalf("streaming should succeed via generalized-form retry: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"content":"hi"`) {
+		t.Fatalf("caller should receive the retry stream, got: %s", truncate(string(body), 200))
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want exactly one retry", calls)
+	}
+	var sent struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(retryBody, &sent); err != nil {
+		t.Fatalf("decode retry body: %v", err)
+	}
+	if got := sent.Messages[1]["reasoning_content"]; got != "." {
+		t.Fatalf("retry body assistant reasoning_content = %v, want placeholder %q", got, ".")
 	}
 }

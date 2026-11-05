@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -57,8 +58,8 @@ func buildZenTransport() *http.Transport {
 		IdleConnTimeout:     90 * time.Second,
 	}
 	t.DialContext = zenDialContext
-	// https 走 uTLS Chrome 指纹 + HTTP/2（完整浏览器指纹含 h2）
-	t.RegisterProtocol("https", zenHTTP2Transport())
+	// https 走 uTLS Chrome 指纹；按 ALPN 协商结果在 HTTP/2 / HTTP/1.1 间分流
+	t.RegisterProtocol("https", newZenHTTPSRouter(zenHTTP2Transport(), zenHTTP1Transport()))
 	return t
 }
 
@@ -66,30 +67,103 @@ func buildZenTransport() *http.Transport {
 // 会让无超时的握手永久挂起，请求既不失败也不返回（故障转移也无法激活）。
 const zenTLSHandshakeTimeout = 15 * time.Second
 
+// errZenALPNNotH2 表示 TLS 握手完成但 ALPN 没协商到 h2。opencode.ai 自 2026-11 起
+// （直连与代理出口实测一致）对该路径只选 http/1.1；把 http/1.1 连接交给
+// http2.Transport 会把响应当 h2 帧解析，报 "frame too large ... frame header
+// looked like an HTTP/1.1 header"（模型同步/zen 对话全挂的根因）。
+var errZenALPNNotH2 = errors.New("zen: ALPN did not negotiate h2")
+
+// zenHTTPSRouter 把 https 请求先交给 HTTP/2 传输层；握手期发现 ALPN 是
+// http/1.1 时切换到 HTTP/1.1 传输层（进程内只切换一次，之后不再浪费 h2 拨号）。
+type zenHTTPSRouter struct {
+	h2, h1      http.RoundTripper
+	preferHTTP1 atomic.Bool
+}
+
+func newZenHTTPSRouter(h2, h1 http.RoundTripper) *zenHTTPSRouter {
+	return &zenHTTPSRouter{h2: h2, h1: h1}
+}
+
+func (r *zenHTTPSRouter) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !r.preferHTTP1.Load() {
+		resp, err := r.h2.RoundTrip(req)
+		if err == nil {
+			return resp, nil
+		}
+		if !isZenALPNNotH2(err) {
+			return nil, err
+		}
+		r.preferHTTP1.Store(true)
+		log.Printf("zen: upstream ALPN is http/1.1, falling back to HTTP/1.1 transport (%v)", err)
+	}
+	// ALPN 失败发生在拨号/握手阶段，请求体尚未被读取，同一 req 直接重发是安全的。
+	return r.h1.RoundTrip(req)
+}
+
+// isZenALPNNotH2 识别「ALPN 未协商到 h2」错误；http2 包可能不保留 %w 链，
+// 按哨兵文本兜底。
+func isZenALPNNotH2(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, errZenALPNNotH2) || strings.Contains(err.Error(), errZenALPNNotH2.Error())
+}
+
+// zenDialTLSConn 经 zen 代理池拨号并完成 uTLS Chrome 指纹握手，按 nextProtos
+// 提供 ALPN 候选；返回连接与协商结果（调用方按需校验协议）。
+func zenDialTLSConn(ctx context.Context, network, addr string, nextProtos []string) (net.Conn, string, error) {
+	raw, err := zenDialContext(ctx, network, addr)
+	if err != nil {
+		return nil, "", err
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		raw.Close()
+		return nil, "", err
+	}
+	uconn := utls.UClient(raw, &utls.Config{
+		ServerName: host,
+		NextProtos: nextProtos,
+	}, utls.HelloChrome_120)
+	// 握手限时；握手成功后 cancel 不影响已建立的连接
+	hsCtx, cancel := context.WithTimeout(ctx, zenTLSHandshakeTimeout)
+	defer cancel()
+	if err := uconn.HandshakeContext(hsCtx); err != nil {
+		raw.Close()
+		return nil, "", err
+	}
+	return uconn, uconn.ConnectionState().NegotiatedProtocol, nil
+}
+
 func zenHTTP2Transport() *http2.Transport {
 	return &http2.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			raw, err := zenDialContext(ctx, network, addr)
+			conn, proto, err := zenDialTLSConn(ctx, network, addr, []string{"h2", "http/1.1"})
 			if err != nil {
 				return nil, err
 			}
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				raw.Close()
-				return nil, err
+			// http2.Transport 假定连接已协商 h2；拿到 http/1.1 时返回哨兵错误，
+			// 由 zenHTTPSRouter 切到 HTTP/1.1 传输层，避免协议错配解析崩溃。
+			if proto != "h2" {
+				conn.Close()
+				return nil, fmt.Errorf("%w (negotiated %q)", errZenALPNNotH2, proto)
 			}
-			uconn := utls.UClient(raw, &utls.Config{
-				ServerName: host,
-				NextProtos: []string{"h2", "http/1.1"},
-			}, utls.HelloChrome_120)
-			// 握手限时；握手成功后 cancel 不影响已建立的连接
-			hsCtx, cancel := context.WithTimeout(ctx, zenTLSHandshakeTimeout)
-			defer cancel()
-			if err := uconn.HandshakeContext(hsCtx); err != nil {
-				raw.Close()
-				return nil, err
-			}
-			return uconn, nil
+			return conn, nil
+		},
+	}
+}
+
+// zenHTTP1Transport 是 ALPN 只协商到 http/1.1 时的回退传输层：同样走代理池 +
+// uTLS 指纹，但 NextProtos 只提供 http/1.1，保证连接不会被协商成 h2
+// （否则 HTTP/1.1 请求会打在 h2 连接上，复现反向的协议错配）。
+func zenHTTP1Transport() *http.Transport {
+	return &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, _, err := zenDialTLSConn(ctx, network, addr, []string{"http/1.1"})
+			return conn, err
 		},
 	}
 }

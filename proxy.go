@@ -1156,6 +1156,25 @@ func injectReasoningContent(body map[string]any) bool {
 	return injected
 }
 
+// isReasoningMissingError 判断上游错误体是否为「历史 assistant 消息缺
+// reasoning_content」类初始化失败（是否真缺由 injectReasoningContent 把关：
+// 没有可补的字段就不重试）。实测两种错误体形态（按错误体匹配，不认状态码）：
+//  1. 明文形态（~2026-10）："Missing required parameter: 'messages[N].reasoning_content'"；
+//  2. 泛化形态（2026-11-05 实测，reflection/beam-free 多轮必现）：Vercel 层把
+//     详情收敛成 "Invalid request"（type=AI_APICallError，param.statusCode=400），
+//     不再提缺失字段——只凭错误体无法确证是 reasoning 问题，误判的代价是多一次
+//     上游往返（重试仍失败时按原错误上报）。
+// 流式 200+SSE 错误事件另有网关事件码 stream_initialization_failed 兜底。
+func isReasoningMissingError(body string) bool {
+	if strings.Contains(body, "Invalid request") && strings.Contains(body, "AI_APICallError") {
+		return true
+	}
+	if strings.Contains(body, "stream_initialization_failed") {
+		return true
+	}
+	return strings.Contains(body, "reasoning_content") && strings.Contains(body, "Missing required parameter")
+}
+
 func clineHeaders(token, sessionID string) http.Header {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+token)
@@ -1691,9 +1710,10 @@ func callClineAPIWithAccountCtx(ctx context.Context, acc *Account, params map[st
 		resp.Body.Close()
 		bodyStr := string(bodyBytes)
 		// GLM 系模型（reflection/beam 等）要求历史 assistant 消息带回 reasoning_content，
-		// 客户端不回传时上游报错（Vercel 层 400，Cline 网关包成 500）：
+		// 客户端不回传时上游报错（Vercel 层 400，Cline 网关包成 500；2026-11 起
+		// 错误体泛化成 Invalid request，见 isReasoningMissingError）：
 		// 按错误体匹配、补齐后原账号立即重试一次
-		if strings.Contains(bodyStr, "reasoning_content") && strings.Contains(bodyStr, "Missing required parameter") {
+		if isReasoningMissingError(bodyStr) {
 			if retryResp := retryWithInjectedReasoning(ctx, acc, body, token, sessionID); retryResp != nil {
 				return retryResp, acc, nil
 			}
@@ -1755,7 +1775,16 @@ func retryStreamIfReasoningError(ctx context.Context, acc *Account, resp *http.R
 		}
 	}
 	if payload == "" || payload == "[DONE]" ||
-		!strings.Contains(payload, "reasoning_content") || !strings.Contains(payload, "Missing required parameter") {
+		!isReasoningMissingError(payload) {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(consumed), br), resp.Body}
+		return resp, nil
+	}
+	// 匹配命中但无可补字段（如 stream_initialization_failed 由其他原因触发、
+	// 历史 assistant 已全带 reasoning）：不能吞掉原错误事件，回填原流透传。
+	if !injectReasoningContent(body) {
 		resp.Body = struct {
 			io.Reader
 			io.Closer
@@ -1763,9 +1792,6 @@ func retryStreamIfReasoningError(ctx context.Context, acc *Account, resp *http.R
 		return resp, nil
 	}
 	resp.Body.Close()
-	if !injectReasoningContent(body) {
-		return nil, fmt.Errorf("upstream stream initialization failed (missing reasoning_content), nothing to inject")
-	}
 	retryBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal reasoning retry body: %w", err)

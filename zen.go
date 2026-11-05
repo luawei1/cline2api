@@ -883,9 +883,10 @@ func callZenAPI(params map[string]any, stream bool) (*http.Response, error) {
 		reason := fmt.Sprintf("zen API %d: %s", resp.StatusCode, truncate(string(bodyBytes), 500))
 
 		// GLM 系模型要求历史 assistant 消息带回 reasoning_content，客户端不回传时
-		// 上游报错（Vercel 层 400，网关可能包成 500）：按错误体匹配、补齐后立即
-		// 重试一次（只做一次，重试仍失败按普通错误报错）
-		if strings.Contains(string(bodyBytes), "reasoning_content") && strings.Contains(string(bodyBytes), "Missing required parameter") && !reasoningInjected {
+		// 上游报错（Vercel 层 400，网关可能包成 500；2026-11 起错误体泛化成
+		// Invalid request，见 isReasoningMissingError）：按错误体匹配、补齐后
+		// 立即重试一次（只做一次，重试仍失败按普通错误报错）
+		if isReasoningMissingError(string(bodyBytes)) && !reasoningInjected {
 			if injectReasoningContent(body) {
 				if nb, err := json.Marshal(body); err == nil {
 					bodyJSON = nb
